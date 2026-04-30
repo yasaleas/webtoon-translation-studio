@@ -1,67 +1,272 @@
-# Webtoon Editor
+# Webtoon Translation Studio
 
-Yerel çalışan webtoon çeviri ve düzenleme stüdyosu. Arayüz React + Vite, API Flask ile çalışır. AI model isimleri ve görevleri sistem dokümanındaki gibi bırakılmıştır: RT-DETR V2, PaddleOCR-VL 1.5, Gemini ve IOPaint.
+Yerel çalışan, AI destekli webtoon çeviri ve düzenleme stüdyosu. Bölüm görsellerini webtoon okuma sitelerindeki gibi dikey akışta açar, yazı bölgelerini seçer, OCR ile metni okur, Gemini ile çevirir, eski yazıları temizler ve yeni çevirileri sayfalara yerleştirir.
 
-## Kurulum
+Bu proje internet üzerinden herkese açık bir editör değildir. Görseller, bölüm verileri, fontlar, yedekler ve ayarlar kullanıcının bilgisayarındaki `data/` klasöründe tutulur.
+
+## Öne Çıkan Özellikler
+
+- Webtoon sayfalarını tek akışta, okuma sitesi düzeninde görüntüleme.
+- RT-DETR V2 ile yazı bölgelerini otomatik seçme.
+- PaddleOCR-VL 1.5 ile seçili kutulardan metin okuma.
+- Gemini API ile sayfa gruplarına bölerek çeviri alma.
+- IOPaint LaMa ile sadece seçili yazı alanlarını temizleme.
+- Tek kutu veya tüm kutular için OCR, temizleme, yerleştirme ve yerleşimi kaldırma.
+- Kutuları sayfa sırası ve yukarıdan aşağıya konuma göre otomatik sıralama.
+- Köşe modu ile kutu geometrisini Photoshop benzeri köşe tutamaçlarıyla düzeltme.
+- Perspektif, eğim, ölçek, renk, kontur, kalınlık, font ve font boyutu düzenleme.
+- Varsayılan font ve font boyutunu ayarlardan belirleme.
+- Arayüzden `.ttf` ve `.otf` font yükleme.
+- Seçili kutuyu orijinal görselden geri yükleme.
+- Kaydetmeden önce yedek alma ve çıktı görsellerini yerel klasörde üretme.
+- Bölüm URL'lerinden görsel indirmek için `webtoon-downloader` yardımcı aracı.
+
+## Gereksinimler
+
+- Linux ortamı. Proje bu yapı üzerinde geliştirilmiştir.
+- Python 3.11.
+- Node.js 20 veya daha yeni bir sürüm.
+- Git.
+- Gemini API key. Çeviri için gereklidir.
+- AI modelleri için yeterli disk alanı. İlk çalıştırmada bazı modeller indirilebilir.
+
+GPU zorunlu değildir. Varsayılan ayar CPU'dur. CUDA kurulumu hazırsa `.env` içinde `AI_DEVICE=cuda` kullanılabilir.
+
+## Hızlı Kurulum
+
+Repoyu klonlayın:
+
+```bash
+git clone https://github.com/yusufyasar333/webtoon-translation-studio.git
+cd webtoon-translation-studio
+```
+
+Python ortamını kurun:
 
 ```bash
 python3.11 -m venv .venv-ai
 .venv-ai/bin/python -m pip install -U pip setuptools wheel
 .venv-ai/bin/python -m pip install -r backend/requirements-ai.txt
+```
+
+Ön yüz bağımlılıklarını kurun:
+
+```bash
 npm install
+```
+
+Yerel ayar dosyasını oluşturun:
+
+```bash
+cp .env.example .env
+```
+
+`.env` içinde en azından Gemini key tanımlayın:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 ## Çalıştırma
 
-Terminal 1:
+API sunucusunu başlatın:
 
 ```bash
 .venv-ai/bin/python -m backend.app
 ```
 
-Terminal 2:
+Yeni bir terminalde arayüzü başlatın:
 
 ```bash
 npm run dev
 ```
 
-Arayüz varsayılan olarak `http://127.0.0.1:5173`, API `http://127.0.0.1:5000` adresinde çalışır.
-Başka cihazlardan erişim gerektiğinde bunu bilinçli olarak açın:
+Tarayıcıdan açın:
 
-```bash
-WEBTOON_HOST=0.0.0.0 WEBTOON_CORS_ORIGINS=http://localhost:5173 .venv-ai/bin/python -m backend.app
-npm run dev -- --host 0.0.0.0
+```text
+http://127.0.0.1:5173
 ```
 
-## Proje Klasörü
+API varsayılan olarak `http://127.0.0.1:5000` adresinde çalışır.
 
-Görselleri şu yapıda yerleştirin:
+## İlk Projeyi Hazırlama
+
+Görselleri aşağıdaki yapıda yerleştirin:
 
 ```text
 data/projects/
   WebtoonAdi/
     Bolum01/
       Orjinal/
-        001.png
-        002.png
+        001.jpg
+        002.jpg
+        003.webp
 ```
 
-Bölüm açıldığında `Duzenlenmis`, `Bolum Verisi`, `Yedekler` ve `Ciktilar` klasörleri otomatik oluşturulur. Orijinal görseller değiştirilmez.
+Desteklenen düzenleme görsel formatları: `.jpg`, `.jpeg`, `.png`, `.webp`.
 
-## Webtoon Downloader Skill
+Bölüm açıldığında sistem şu klasörleri otomatik oluşturur:
 
-`webtoon-downloader/` klasörü bölüm URL'lerinden sayfa görsellerini indiren yardımcı skill'dir. Varsayılan çıktı yolu `data/projects` olduğu için indirilen bölümler editörde doğrudan görünür.
+```text
+Duzenlenmis/     Düzenleme yapılan çalışma görselleri
+Bolum Verisi/    Kutu, OCR, çeviri ve stil verileri
+Yedekler/        Kaydetme ve geri alma yedekleri
+Ciktilar/        Kaydedilmiş son çıktılar
+```
+
+`Orjinal`, `Orijinal` ve `Original` klasör adları desteklenir. Orijinal görseller değiştirilmez.
+
+## Günlük Kullanım Akışı
+
+1. Sol panelden webtoon ve bölüm seçin.
+2. Sayfaları dikey akışta kontrol edin.
+3. `Yazıları seç` ile metin bölgelerini otomatik çıkarın.
+4. Gerekirse kutuları elle taşıyın veya köşe modu ile düzeltin.
+5. `OCR` ile seçili bölgelerdeki metinleri okuyun.
+6. Sağ panelde kaynak metni ve çeviri metnini kontrol edin.
+7. `Çevir` ile Gemini çevirisini alın.
+8. `Sil` ile eski yazıyı temizleyin.
+9. `Yerleştir` ile çeviriyi görsel üzerine yerleştirin.
+10. Font, boyut, renk, kontur, perspektif ve köşe ayarlarını düzenleyin.
+11. `Kaydet` ile düzenlenmiş sayfaları çıktı olarak üretin.
+
+Sağ paneldeki tekil kutu butonları sadece aktif kutu üzerinde çalışır. Üst araç çubuğundaki işlemler tüm bölüm akışı için kullanılır.
+
+## AI ve Çeviri Ayarları
+
+Ayarlar menüsünden şu değerler düzenlenebilir:
+
+- Gemini model adı.
+- Hedef dil.
+- Gemini API key kayıtları ve aktif key seçimi.
+- Çeviriyi kaç parçaya bölerek göndereceği.
+- Gemini timeout süresi.
+- RT-DETR model adı, eşik değeri ve kullanılacak etiketler.
+- OCR dili.
+- IOPaint modeli, cihaz ve temizleme payı.
+- Varsayılan font ailesi ve font boyutu.
+
+Önerilen güvenli kullanım `.env` dosyasıdır. `.env` içindeki `GEMINI_API_KEY`, arayüzde kayıtlı keylerden önce kullanılır. Arayüzden eklenen keyler yalnızca yerel `data/settings.json` dosyasında saklanır.
+
+## Font Yönetimi
+
+Varsayılan sistem fontları otomatik listelenir. Webtoon tarzı özel fontlar için iki seçenek vardır:
+
+- Ayarlar menüsünden `.ttf` veya `.otf` font yükleyin.
+- Yerel font yolunu `.env` içinde tanımlayın.
+
+Örnek:
+
+```env
+WEBTOON_TIGHT_SPOT_BB_PATH=/tam/yol/tight-spot-bb-regular.ttf
+```
+
+Yüklenen fontlar `data/fonts/` altında tutulur ve GitHub'a gönderilmez.
+
+## Webtoon Downloader
+
+`webtoon-downloader/` klasörü bölüm URL'lerinden görselleri indirip doğrudan editörün okuyacağı `data/projects` yapısına kaydeder.
+
+Tek bölüm indirme:
 
 ```bash
 .venv-ai/bin/python webtoon-downloader/scripts/downloader.py --url "https://..." --mode single
 ```
 
-## Güvenlik ve Yayınlama Notları
+Bölüm listesini görme:
 
-- RT-DETR V2 varsayılan olarak `ogkalu/comic-text-and-bubble-detector` modelini kullanır ve yalnızca yazı bölgelerini (`text_bubble`, `text_free`) seçer. Balon gövdesini silmez.
-- Gemini için önerilen yöntem `.env` dosyasında `GEMINI_API_KEY` kullanmaktır. `.env.example` şablondur; gerçek `.env` GitHub'a gönderilmez.
-- Tight Spot BB gibi yerel fontlar için `.env` içinde `WEBTOON_TIGHT_SPOT_BB_PATH=/tam/yol/font.ttf` tanımlayın veya fontu arayüzden yükleyin.
-- Ayarlar menüsünden eklenen keyler yalnızca yerel yedek kullanım içindir ve `data/settings.json` içinde saklanır. `.env` içinde key varsa backend önce onu kullanır.
-- IOPaint varsayılan olarak `lama` ve CPU ile çalışır. `IOPAINT_MODEL`, `AI_DEVICE` ve `INPAINT_PADDING` ile değiştirilebilir.
-- Kaydetme işlemi çeviri metinlerini düzenlenmiş görsellerin üzerine işler ve önce yedek alır.
-- `data/settings.json`, `data/projects/`, `data/fonts/`, `.venv*`, `node_modules/` ve `dist/` GitHub'a eklenmemelidir. `.gitignore` bu dosyaları varsayılan olarak dışarıda bırakır.
+```bash
+.venv-ai/bin/python webtoon-downloader/scripts/downloader.py --url "https://..." --list-only
+```
+
+Aralık indirme:
+
+```bash
+.venv-ai/bin/python webtoon-downloader/scripts/downloader.py --url "https://..." --mode range --start 1 --end 20
+```
+
+Desteklenen kaynaklar: Webtoons.com, MangaDex, Madara tabanlı siteler ve genel görsel sayfaları. Bazı sitelerde Cloudflare, oturum veya kaynak engeli nedeniyle indirme başarısız olabilir.
+
+## Klasör Yapısı
+
+```text
+backend/                Flask API, AI işleri, ayarlar ve görsel işleme
+frontend/src/           React arayüzü ve stiller
+webtoon-downloader/     Bölüm indirme yardımcı aracı
+data/                   Yerel projeler, ayarlar, fontlar ve çıktılar
+SISTEM_DOKUMANI.md      Teknik sistem dokümanı
+AGENTS.md               Katkı sağlayanlar için kısa rehber
+```
+
+`data/`, `.env`, `.venv-ai/`, `node_modules/` ve `dist/` kaynak kod değildir. Bu klasörler `.gitignore` ile dışarıda bırakılır.
+
+## Güvenlik Notları
+
+- Gerçek API keyleri GitHub'a göndermeyin.
+- `.env` dosyası yerel kalmalıdır.
+- `data/projects/` içinde telifli veya özel içerikler olabilir; bu klasörü public repoya eklemeyin.
+- Flask varsayılan olarak sadece `127.0.0.1` üzerinde çalışır.
+- Dış ağdan erişim açılacaksa `WEBTOON_HOST` ve `WEBTOON_CORS_ORIGINS` bilinçli şekilde sınırlandırılmalıdır.
+- Font yükleme boyutu `WEBTOON_MAX_UPLOAD_MB` ile sınırlandırılır.
+
+## Sorun Giderme
+
+Gemini timeout hatası alırsanız:
+
+- Ayarlardan `Gemini timeout` değerini artırın.
+- `Gemini page splits` değerini 2 veya 3 yapın.
+- Çok uzun bölümlerde önce daha az sayfayı çevirin.
+
+OCR veya tespit kötü sonuç verirse:
+
+- Kutuyu elle düzeltin veya köşe modunu kullanın.
+- RT-DETR eşik değerini ayarlardan değiştirin.
+- `rtdetrTextLabels` değerinin `text_bubble,text_free` kaldığından emin olun.
+
+Temizleme görselde görünmüyorsa:
+
+- İş kuyruğunda `inpaint` hatasını kontrol edin.
+- Kutunun gerçekten yazı alanını kapsadığını doğrulayın.
+- Sayfayı yenilemek yerine uygulamadaki `Yenile` butonunu kullanın.
+
+Font görünmüyorsa:
+
+- Font dosyasının `.ttf` veya `.otf` olduğundan emin olun.
+- `.env` ile verilen yerel yolun doğru olduğunu kontrol edin.
+- Arayüzden yüklenen fontlar için API ve arayüzü yeniden başlatın.
+
+OpenCV veya görüntü kütüphanesi hatası alırsanız Ubuntu tabanlı sistemlerde şu paketler gerekebilir:
+
+```bash
+sudo apt install libgl1 libglib2.0-0
+```
+
+## Geliştirme Komutları
+
+Frontend production build:
+
+```bash
+npm run build
+```
+
+Frontend ön izleme:
+
+```bash
+npm run preview
+```
+
+Python dosyalarını hızlı kontrol:
+
+```bash
+.venv-ai/bin/python -m compileall backend webtoon-downloader
+```
+
+Bağımlılık güvenlik kontrolü:
+
+```bash
+npm audit --audit-level=moderate
+```
+
+## Yasal Kullanım
+
+Bu araç yerel düzenleme ve çeviri iş akışını kolaylaştırmak için geliştirilmiştir. İndirdiğiniz veya düzenlediğiniz içeriklerin kullanım haklarından siz sorumlusunuz. Public GitHub reposuna telifli webtoon sayfaları, özel proje verileri veya API keyleri eklemeyin.

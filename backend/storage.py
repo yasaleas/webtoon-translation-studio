@@ -363,7 +363,7 @@ def draw_text_layer(text: str, bbox: dict[str, Any], style: dict[str, Any]) -> I
     draw = ImageDraw.Draw(layer)
     size = int(style.get("fontSize", 28))
     stroke_width = int(style.get("strokeWidth", 1))
-    font = load_font(size, bool(style.get("bold")), style.get("fontFamily", "tight-spot-bb"))
+    font = load_font(size, bool(style.get("bold")), style.get("fontFamily", "noto-sans-black"))
     lines = layout_text_lines(draw, text, font, max(1, width - 12))
     line_height = int(size * float(style.get("lineHeight", 1.1)))
     total_height = line_height * len(lines)
@@ -558,7 +558,7 @@ def clamp_float(value: Any, minimum: float, maximum: float, fallback: float) -> 
     return min(max(parsed, minimum), maximum)
 
 
-def load_font(size: int, bold: bool = False, font_family: str = "tight-spot-bb") -> ImageFont.FreeTypeFont:
+def load_font(size: int, bold: bool = False, font_family: str = "noto-sans-black") -> ImageFont.FreeTypeFont:
     selected = font_path(font_family, bold)
     if selected:
         return ImageFont.truetype(str(selected), size)

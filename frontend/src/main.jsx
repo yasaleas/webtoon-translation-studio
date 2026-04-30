@@ -106,7 +106,7 @@ function App() {
     }).catch((error) => setNotice(error.message));
     api.fonts().then((items) => {
       setFonts(items);
-      setDefaultFont((current) => current || items.find((font) => font.id === "tight-spot-bb")?.id || items[0]?.id || "noto-sans");
+      setDefaultFont((current) => current || items.find((font) => font.id === "noto-sans-black")?.id || items[0]?.id || "noto-sans");
     }).catch(() => {});
   }, []);
 
@@ -172,7 +172,7 @@ function App() {
   }
 
   async function createBox(pageId, bbox) {
-    const box = await api.createBox(session, pageId, bbox, { fontFamily: defaultFont || "tight-spot-bb", fontSize: defaultFontSize || 28 });
+    const box = await api.createBox(session, pageId, bbox, { fontFamily: defaultFont || "noto-sans-black", fontSize: defaultFontSize || 28 });
     await refreshState();
     setActivePageId(pageId);
     setActiveBoxId(box.id);
@@ -264,9 +264,9 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">WE</span>
+          <span className="brand-mark">WT</span>
           <div>
-            <strong>Webtoon Editor</strong>
+            <strong>Webtoon Translation Studio</strong>
             <small>Yerel çeviri ve düzenleme stüdyosu</small>
           </div>
         </div>
@@ -780,7 +780,7 @@ function Inspector({
             <button onClick={() => onRestoreOriginal(box)}><RefreshCcw size={15} /> Orijinale dön</button>
           </div>
           <div className="style-grid">
-            <label className="wide">Font<select value={style.fontFamily || "tight-spot-bb"} onChange={(event) => onPatch(box.id, { style: { ...style, fontFamily: event.target.value } })}>
+            <label className="wide">Font<select value={style.fontFamily || "noto-sans-black"} onChange={(event) => onPatch(box.id, { style: { ...style, fontFamily: event.target.value } })}>
               {fonts.map((font) => (
                 <option key={font.id} value={font.id}>{font.name}</option>
               ))}
