@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-ai/
+.pytest_cache/
+.mypy_cache/
+
+# Node/Vite
+node_modules/
+dist/
+npm-debug.log*
+
+# Local runtime data and secrets
+.env
+.env.*
+!.env.example
+data/settings.json
+data/fonts/
+data/projects/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.codex
+.codex/
+*.skill
