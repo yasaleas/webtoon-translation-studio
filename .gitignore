@@ -14,10 +14,10 @@ npm-debug.log*
 # Local runtime data and secrets
 .env
 .env.*
-!.env.example
 data/settings.json
 data/fonts/
 data/projects/
+reader/
 
 # OS/editor noise
 .DS_Store

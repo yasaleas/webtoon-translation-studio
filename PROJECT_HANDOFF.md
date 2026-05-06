@@ -29,9 +29,8 @@ Bu dosya yeni bir konuşmada proje bağlamını hızlıca geri yüklemek için t
 - Python bağımlılık dosyası `backend/requirements-ai.txt`.
 - Downloader bağımlılıkları da `.venv-ai` içine taşındı.
 - Runtime verileri `data/` altında kalır ve Git'e girmez.
-- Secret için önerilen yol `.env`; gerçek Gemini key GitHub'a gönderilmez.
-- `.env` içindeki `GEMINI_API_KEY`, arayüzde kayıtlı keylerden önce kullanılır.
-- Yerel Tight Spot BB fontu kodda hardcoded değildir; `WEBTOON_TIGHT_SPOT_BB_PATH` veya arayüzden font yükleme ile kullanılır.
+- Gemini keyleri arayüzden eklenir ve yerel `data/settings.json` içinde kalır.
+- Yerel Tight Spot BB fontu kodda hardcoded değildir; arayüzden font yükleme ile kullanılır.
 - Varsayılan font fallback'i `noto-sans-black`.
 - Repo public; telifli webtoon sayfaları, proje görselleri ve keyler commitlenmemeli.
 
@@ -49,7 +48,7 @@ Bu dosya yeni bir konuşmada proje bağlamını hızlıca geri yüklemek için t
 - Arayüzden `.ttf` ve `.otf` font yükleme.
 - Perspektif, eğim, ölçek, renk, kontur, kalınlık ve hizalama ayarları.
 - Kaydetmede manuel satır sonları ve boş satırları koruyan metin render akışı.
-- Güvenlik için path validation, CORS sınırlama, `.env.example` ve `.gitignore`.
+- Güvenlik için path validation, CORS sınırlama ve `.gitignore`.
 
 ## Local Commands
 
@@ -60,7 +59,6 @@ python3.11 -m venv .venv-ai
 .venv-ai/bin/python -m pip install -U pip setuptools wheel
 .venv-ai/bin/python -m pip install -r backend/requirements-ai.txt
 npm install
-cp .env.example .env
 ```
 
 Çalıştırma:
@@ -87,7 +85,7 @@ Downloader örneği:
 ## Before Changing Code
 
 1. `git status --short --branch` çalıştır.
-2. Kullanıcının yerel runtime dosyalarına dokunma: `.env`, `.venv-ai/`, `data/`, `node_modules/`, `dist/`.
+2. Kullanıcının yerel runtime dosyalarına dokunma: `.env*`, `.venv-ai/`, `data/`, `node_modules/`, `dist/`, `reader/`.
 3. AI model isimlerini veya temel model rollerini kullanıcı açıkça istemeden değiştirme.
 4. UI değişikliklerinde profesyonel, yoğun ama okunabilir bir editör deneyimini koru.
 5. Değişiklik sonrası en azından `npm run build` ve Python `compileall` çalıştır.

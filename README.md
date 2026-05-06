@@ -27,17 +27,17 @@ Bu proje internet üzerinden herkese açık bir editör değildir. Görseller, b
 - Python 3.11.
 - Node.js 20 veya daha yeni bir sürüm.
 - Git.
-- Gemini API key. Çeviri için gereklidir.
+- Gemini API key. Çeviri için gereklidir ve arayüzdeki Ayarlar menüsünden eklenir.
 - AI modelleri için yeterli disk alanı. İlk çalıştırmada bazı modeller indirilebilir.
 
-GPU zorunlu değildir. Varsayılan ayar CPU'dur. CUDA kurulumu hazırsa `.env` içinde `AI_DEVICE=cuda` kullanılabilir.
+GPU zorunlu değildir. Varsayılan ayar CPU'dur. CUDA kurulumu hazırsa cihaz ayarı arayüzden değiştirilebilir.
 
 ## Hızlı Kurulum
 
 Repoyu klonlayın:
 
 ```bash
-git clone https://github.com/yusufyasar333/webtoon-translation-studio.git
+git clone https://github.com/yasaleas/webtoon-translation-studio.git
 cd webtoon-translation-studio
 ```
 
@@ -53,18 +53,6 @@ python3.11 -m venv .venv-ai
 
 ```bash
 npm install
-```
-
-Yerel ayar dosyasını oluşturun:
-
-```bash
-cp .env.example .env
-```
-
-`.env` içinde en azından Gemini key tanımlayın:
-
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 ## Çalıştırma
@@ -88,6 +76,8 @@ http://127.0.0.1:5173
 ```
 
 API varsayılan olarak `http://127.0.0.1:5000` adresinde çalışır.
+
+İlk açılışta sağ üstteki ayarlar menüsünden Gemini API key ekleyin. Font, OCR, çeviri, temizleme ve opsiyonel reader senkronizasyon ayarları aynı menüden düzenlenir.
 
 ## İlk Projeyi Hazırlama
 
@@ -145,21 +135,15 @@ Ayarlar menüsünden şu değerler düzenlenebilir:
 - OCR dili.
 - IOPaint modeli, cihaz ve temizleme payı.
 - Varsayılan font ailesi ve font boyutu.
+- Opsiyonel reader senkronizasyon hedefi.
 
-Önerilen güvenli kullanım `.env` dosyasıdır. `.env` içindeki `GEMINI_API_KEY`, arayüzde kayıtlı keylerden önce kullanılır. Arayüzden eklenen keyler yalnızca yerel `data/settings.json` dosyasında saklanır.
+Arayüzden eklenen keyler yalnızca yerel `data/settings.json` dosyasında saklanır. Bu dosya GitHub'a gönderilmez.
 
 ## Font Yönetimi
 
-Varsayılan sistem fontları otomatik listelenir. Webtoon tarzı özel fontlar için iki seçenek vardır:
+Varsayılan sistem fontları otomatik listelenir. Webtoon tarzı özel fontlar için:
 
 - Ayarlar menüsünden `.ttf` veya `.otf` font yükleyin.
-- Yerel font yolunu `.env` içinde tanımlayın.
-
-Örnek:
-
-```env
-WEBTOON_TIGHT_SPOT_BB_PATH=/tam/yol/tight-spot-bb-regular.ttf
-```
 
 Yüklenen fontlar `data/fonts/` altında tutulur ve GitHub'a gönderilmez.
 
@@ -198,12 +182,12 @@ SISTEM_DOKUMANI.md      Teknik sistem dokümanı
 AGENTS.md               Katkı sağlayanlar için kısa rehber
 ```
 
-`data/`, `.env`, `.venv-ai/`, `node_modules/` ve `dist/` kaynak kod değildir. Bu klasörler `.gitignore` ile dışarıda bırakılır.
+`data/`, `.env*`, `.venv-ai/`, `node_modules/`, `dist/` ve kişisel `reader/` çalışma klasörü kaynak kod değildir. Bu klasörler `.gitignore` ile dışarıda bırakılır.
 
 ## Güvenlik Notları
 
 - Gerçek API keyleri GitHub'a göndermeyin.
-- `.env` dosyası yerel kalmalıdır.
+- Keyler arayüzden girildiğinde `data/settings.json` içinde yerel kalır.
 - `data/projects/` içinde telifli veya özel içerikler olabilir; bu klasörü public repoya eklemeyin.
 - Flask varsayılan olarak sadece `127.0.0.1` üzerinde çalışır.
 - Dış ağdan erişim açılacaksa `WEBTOON_HOST` ve `WEBTOON_CORS_ORIGINS` bilinçli şekilde sınırlandırılmalıdır.
@@ -232,7 +216,6 @@ Temizleme görselde görünmüyorsa:
 Font görünmüyorsa:
 
 - Font dosyasının `.ttf` veya `.otf` olduğundan emin olun.
-- `.env` ile verilen yerel yolun doğru olduğunu kontrol edin.
 - Arayüzden yüklenen fontlar için API ve arayüzü yeniden başlatın.
 
 OpenCV veya görüntü kütüphanesi hatası alırsanız Ubuntu tabanlı sistemlerde şu paketler gerekebilir:

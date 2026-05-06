@@ -20,6 +20,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "defaultFontFamily": "noto-sans-black",
         "defaultFontSize": 28,
     },
+    "reader": {
+        "syncEnabled": False,
+        "syncHost": "",
+        "syncPath": "~/webtoon-reader/data/library",
+    },
     "ai": {
         "defaultTargetLanguage": "TR",
         "geminiModel": "gemini-2.5-flash",
@@ -33,9 +38,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "rtdetrThreshold": 0.55,
         "rtdetrTextLabels": "text_bubble,text_free",
         "ocrLanguage": "en",
+        "ocrPerspectiveEnabled": True,
+        "ocrPerspectiveMinAngle": 7,
+        "ocrPerspectivePadding": 1.0,
         "inpaintModel": "lama",
         "aiDevice": "cpu",
         "inpaintPadding": 8,
+        "inpaintPerspectiveMask": True,
         "strictMode": False,
     }
 }
@@ -91,13 +100,22 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
     current = load_settings()
     incoming_ai = payload.get("ai") or {}
     incoming_editor = payload.get("editor") or {}
+    incoming_reader = payload.get("reader") or {}
     current_ai = current.setdefault("ai", {})
     current_editor = current.setdefault("editor", {})
+    current_reader = current.setdefault("reader", {})
 
     if "defaultFontFamily" in incoming_editor:
         current_editor["defaultFontFamily"] = str(incoming_editor["defaultFontFamily"]).strip()
     if "defaultFontSize" in incoming_editor:
         current_editor["defaultFontSize"] = int(clamp_float(incoming_editor["defaultFontSize"], 10, 96, 28))
+
+    if "syncEnabled" in incoming_reader:
+        current_reader["syncEnabled"] = bool(incoming_reader["syncEnabled"])
+    if "syncHost" in incoming_reader:
+        current_reader["syncHost"] = str(incoming_reader["syncHost"]).strip()
+    if "syncPath" in incoming_reader:
+        current_reader["syncPath"] = str(incoming_reader["syncPath"]).strip()
 
     for key in (
         "defaultTargetLanguage",
@@ -114,6 +132,10 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
     if "rtdetrThreshold" in incoming_ai:
         current_ai["rtdetrThreshold"] = clamp_float(incoming_ai["rtdetrThreshold"], 0.05, 0.95, 0.55)
+    if "ocrPerspectiveMinAngle" in incoming_ai:
+        current_ai["ocrPerspectiveMinAngle"] = clamp_float(incoming_ai["ocrPerspectiveMinAngle"], 0, 45, 7)
+    if "ocrPerspectivePadding" in incoming_ai:
+        current_ai["ocrPerspectivePadding"] = clamp_float(incoming_ai["ocrPerspectivePadding"], 0, 3, 1.0)
     if "geminiPageSplits" in incoming_ai:
         current_ai["geminiPageSplits"] = int(clamp_float(incoming_ai["geminiPageSplits"], 1, 8, 2))
     if "geminiBatchSize" in incoming_ai:
@@ -124,6 +146,10 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
         current_ai["geminiTimeout"] = int(clamp_float(incoming_ai["geminiTimeout"], 15, 180, 60))
     if "inpaintPadding" in incoming_ai:
         current_ai["inpaintPadding"] = int(clamp_float(incoming_ai["inpaintPadding"], 0, 80, 8))
+    if "ocrPerspectiveEnabled" in incoming_ai:
+        current_ai["ocrPerspectiveEnabled"] = bool(incoming_ai["ocrPerspectiveEnabled"])
+    if "inpaintPerspectiveMask" in incoming_ai:
+        current_ai["inpaintPerspectiveMask"] = bool(incoming_ai["inpaintPerspectiveMask"])
     if "strictMode" in incoming_ai:
         current_ai["strictMode"] = bool(incoming_ai["strictMode"])
     if "geminiKeys" in incoming_ai:

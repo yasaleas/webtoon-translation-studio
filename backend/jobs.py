@@ -1,13 +1,32 @@
 from __future__ import annotations
 
+import logging
+import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .settings import ai_value, clamp_float
-from .services.ai import detect_text_regions, inpaint_region, run_ocr, translate_texts
-from .storage import add_box, backup_image, image_path, load_state, page_records, render_texts, save_state, update_box
+from .config import PROJECTS_DIR
+from .settings import ai_value, clamp_float, load_settings
+from .services.ai import detect_text_regions, inpaint_mask, inpaint_region, run_ocr_with_geometry, translate_texts
+from .storage import (
+    add_box,
+    add_manual_mask,
+    backup_image,
+    begin_image_history,
+    image_path,
+    load_state,
+    manual_mask_path,
+    page_records,
+    record_image_history,
+    render_texts,
+    restore_brush_from_original,
+    save_state,
+    update_box,
+    update_manual_mask,
+)
 
 
 @dataclass
@@ -29,16 +48,34 @@ def create_job(kind: str, message: str = "") -> dict[str, Any]:
     return job
 
 
+def start(job: dict[str, Any], message: str | None = None) -> dict[str, Any]:
+    job["status"] = "running"
+    job["progress"] = max(1, int(job.get("progress") or 0))
+    if message:
+        job["message"] = message
+    return job
+
+
+def advance(job: dict[str, Any], progress: int, message: str | None = None) -> dict[str, Any]:
+    job["status"] = "running"
+    job["progress"] = max(1, min(99, int(progress)))
+    if message:
+        job["message"] = message
+    return job
+
+
 def complete(job: dict[str, Any], message: str) -> dict[str, Any]:
     job["status"] = "done"
     job["progress"] = 100
     job["message"] = message
+    job["completedAt"] = datetime.now(timezone.utc).isoformat()
     return job
 
 
 def fail(job: dict[str, Any], error: Exception) -> dict[str, Any]:
     job["status"] = "failed"
     job["message"] = str(error)
+    job["completedAt"] = datetime.now(timezone.utc).isoformat()
     return job
 
 
@@ -49,6 +86,7 @@ def list_jobs() -> list[dict[str, Any]]:
 def detect(project_id: str, episode_id: str) -> dict[str, Any]:
     job = create_job("detect", "Yazı alanları tespit ediliyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
         state["boxes"] = [
             box
@@ -58,7 +96,10 @@ def detect(project_id: str, episode_id: str) -> dict[str, Any]:
         save_state(project_id, episode_id, state)
         existing = state["boxes"]
         created = 0
-        for page in page_records(project_id, episode_id):
+        pages = page_records(project_id, episode_id)
+        total = max(1, len(pages))
+        for index, page in enumerate(pages, start=1):
+            advance(job, int(((index - 1) / total) * 95), f"Yazı alanları tespit ediliyor ({index}/{total})")
             page_existing = [box for box in existing if box["pageId"] == page["id"]]
             for bbox in detect_text_regions(page, image_path(project_id, episode_id, page["id"])):
                 if any(overlap_ratio(box["bbox"], bbox) > 0.55 for box in page_existing):
@@ -85,16 +126,23 @@ def overlap_ratio(first: dict[str, float], second: dict[str, float]) -> float:
 def ocr(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> dict[str, Any]:
     job = create_job("ocr", "OCR çalışıyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
         ids = set(box_ids or [box["id"] for box in state["boxes"]])
-        for box in state["boxes"]:
-            if box["id"] in ids:
-                update_box(
-                    project_id,
-                    episode_id,
-                    box["id"],
-                    {"sourceText": run_ocr(image_path(project_id, episode_id, box["pageId"]), box), "status": "ocr"},
-                )
+        selected = [box for box in state["boxes"] if box["id"] in ids]
+        total = max(1, len(selected))
+        for index, box in enumerate(selected, start=1):
+            advance(job, int(((index - 1) / total) * 95), f"OCR çalışıyor ({index}/{total})")
+            result = run_ocr_with_geometry(image_path(project_id, episode_id, box["pageId"]), box)
+            patch = {"sourceText": result["text"], "status": "ocr"}
+            if result.get("corners"):
+                patch["corners"] = result["corners"]
+            update_box(
+                project_id,
+                episode_id,
+                box["id"],
+                patch,
+            )
         return complete(job, "OCR tamamlandı")
     except Exception as error:
         return fail(job, error)
@@ -103,6 +151,7 @@ def ocr(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> d
 def translate(project_id: str, episode_id: str, target_language: str) -> dict[str, Any]:
     job = create_job("translate", "Çeviri yapılıyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
         candidates = [box for box in state["boxes"] if box.get("sourceText") and not box.get("translatedText")]
         if not candidates:
@@ -115,8 +164,7 @@ def translate(project_id: str, episode_id: str, target_language: str) -> dict[st
             chunk_boxes = [box for page_id in chunk for box in page_candidates(candidates, page_id)]
             if not chunk_boxes:
                 continue
-            job["message"] = f"Çeviri yapılıyor ({index}/{len(chunks)} parça)"
-            job["progress"] = max(1, int(((index - 1) / max(1, len(chunks))) * 90))
+            advance(job, max(1, int(((index - 1) / max(1, len(chunks))) * 90)), f"Çeviri yapılıyor ({index}/{len(chunks)} parça)")
             translations = translate_texts([box["sourceText"] for box in chunk_boxes], target_language)
             for box, translated in zip(chunk_boxes, translations):
                 update_box(project_id, episode_id, box["id"], {"translatedText": translated, "status": "translated"})
@@ -163,14 +211,66 @@ def split_evenly(items: list[Any], parts: int) -> list[list[Any]]:
 def inpaint(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> dict[str, Any]:
     job = create_job("inpaint", "Görsel temizleniyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
         ids = set(box_ids or [box["id"] for box in state["boxes"]])
-        for box in state["boxes"]:
-            if box["id"] in ids:
-                backup_image(project_id, episode_id, box["pageId"])
-                inpaint_region(image_path(project_id, episode_id, box["pageId"]), box)
-                update_box(project_id, episode_id, box["id"], {"status": "cleaned"})
+        selected = [box for box in state["boxes"] if box["id"] in ids]
+        total = max(1, len(selected))
+        for index, box in enumerate(selected, start=1):
+            advance(job, int(((index - 1) / total) * 95), f"Görsel temizleniyor ({index}/{total})")
+            history = begin_image_history(project_id, episode_id, box["pageId"], "box-inpaint", {"boxId": box["id"]})
+            backup_image(project_id, episode_id, box["pageId"])
+            inpaint_region(image_path(project_id, episode_id, box["pageId"]), box)
+            record_image_history(project_id, episode_id, history)
+            update_box(project_id, episode_id, box["id"], {"status": "cleaned"})
         return complete(job, "Temizleme tamamlandı")
+    except Exception as error:
+        return fail(job, error)
+
+
+def manual_inpaint(
+    project_id: str,
+    episode_id: str,
+    page_id: str,
+    mask_payload: str,
+    bbox: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    job = create_job("manual-inpaint", "Fırça alanı temizleniyor")
+    mask_record = None
+    try:
+        start(job)
+        history = begin_image_history(project_id, episode_id, page_id, "manual-inpaint")
+        advance(job, 12, "Fırça maskesi hazırlanıyor")
+        mask_record = add_manual_mask(project_id, episode_id, page_id, mask_payload, bbox)
+        history["meta"] = {"maskId": mask_record["id"]}
+        advance(job, 24, "Temizlik öncesi yedek alınıyor")
+        backup_image(project_id, episode_id, page_id)
+        advance(job, 35, "IOPaint çalışıyor")
+        inpaint_mask(image_path(project_id, episode_id, page_id), manual_mask_path(project_id, episode_id, mask_record))
+        record_image_history(project_id, episode_id, history, mask_record.get("maskFile"))
+        update_manual_mask(project_id, episode_id, mask_record["id"], {"status": "cleaned"})
+        return complete(job, "Fırça temizliği tamamlandı")
+    except Exception as error:
+        if mask_record is not None:
+            update_manual_mask(project_id, episode_id, mask_record["id"], {"status": "failed"})
+        return fail(job, error)
+
+
+def restore_brush(
+    project_id: str,
+    episode_id: str,
+    page_id: str,
+    mask_payload: str,
+    bbox: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    job = create_job("restore-brush", "Orijinal piksel geri getiriliyor")
+    try:
+        start(job)
+        history = begin_image_history(project_id, episode_id, page_id, "restore-brush")
+        advance(job, 30, "Geri getirme maskesi hazırlanıyor")
+        mask_record = restore_brush_from_original(project_id, episode_id, page_id, mask_payload, bbox)
+        record_image_history(project_id, episode_id, history, mask_record.get("maskFile"))
+        return complete(job, "Orijinal pikseller geri getirildi")
     except Exception as error:
         return fail(job, error)
 
@@ -178,10 +278,14 @@ def inpaint(project_id: str, episode_id: str, box_ids: list[str] | None = None) 
 def place(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> dict[str, Any]:
     job = create_job("place", "Metinler yerleştiriliyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
         ids = set(box_ids or [box["id"] for box in state["boxes"]])
         placed = 0
-        for box in state["boxes"]:
+        selected = [box for box in state["boxes"] if box["id"] in ids]
+        total = max(1, len(selected))
+        for index, box in enumerate(selected, start=1):
+            advance(job, int(((index - 1) / total) * 95), f"Metinler yerleştiriliyor ({index}/{total})")
             if box["id"] in ids and box.get("translatedText"):
                 box["status"] = "placed"
                 placed += 1
@@ -194,10 +298,14 @@ def place(project_id: str, episode_id: str, box_ids: list[str] | None = None) ->
 def unplace(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> dict[str, Any]:
     job = create_job("unplace", "Yerleşimler kaldırılıyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
         ids = set(box_ids or [box["id"] for box in state["boxes"]])
         removed = 0
-        for box in state["boxes"]:
+        selected = [box for box in state["boxes"] if box["id"] in ids]
+        total = max(1, len(selected))
+        for index, box in enumerate(selected, start=1):
+            advance(job, int(((index - 1) / total) * 95), f"Yerleşimler kaldırılıyor ({index}/{total})")
             if box["id"] in ids and box.get("status") == "placed":
                 box["status"] = "translated" if box.get("translatedText") else "draft"
                 removed += 1
@@ -210,10 +318,50 @@ def unplace(project_id: str, episode_id: str, box_ids: list[str] | None = None) 
 def save_images(project_id: str, episode_id: str) -> dict[str, Any]:
     job = create_job("save", "Görseller kaydediliyor")
     try:
+        start(job)
         state = load_state(project_id, episode_id)
-        pages = {box["pageId"] for box in state["boxes"]}
-        for page_id in pages:
+        pages = sorted({box["pageId"] for box in state["boxes"]})
+        total = max(1, len(pages))
+        for index, page_id in enumerate(pages, start=1):
+            advance(job, int(((index - 1) / total) * 90), f"Görseller kaydediliyor ({index}/{total})")
             render_texts(project_id, episode_id, page_id, [box for box in state["boxes"] if box["pageId"] == page_id])
+        sync_to_reader(project_id)
         return complete(job, "Düzenlenmiş görseller kaydedildi")
     except Exception as error:
         return fail(job, error)
+
+
+def sync_to_reader(project_id: str) -> None:
+    settings = load_settings()
+    reader = settings.get("reader", {})
+    if not reader.get("syncEnabled"):
+        return
+    sync_host = reader.get("syncHost", "").strip()
+    sync_path = reader.get("syncPath", "").strip()
+    if not sync_host or not sync_path:
+        return
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return
+    edited_dirs = list(project_dir.rglob("Duzenlenmis"))
+    if not edited_dirs:
+        edited_dirs = list(project_dir.rglob("Edited"))
+    if not edited_dirs:
+        return
+    for edited_dir in edited_dirs:
+        episode_dir = edited_dir.parent
+        episode_name = episode_dir.name
+        dest = f"{sync_host}:{sync_path}/{project_id}/{episode_name}/"
+        try:
+            result = subprocess.run(
+                ["rsync", "-avz", "--timeout=30", f"{edited_dir}/", dest],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(f"Reader sync failed for {project_id}/{episode_name}: {detail}")
+        except Exception:
+            logging.getLogger(__name__).warning("Reader sync failed for %s/%s", project_id, episode_name)
+            raise

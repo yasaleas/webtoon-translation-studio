@@ -1,10 +1,14 @@
+import base64
+import binascii
 import json
 import math
 import re
 import shutil
-from threading import RLock
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +29,9 @@ from .fonts import font_path
 from .settings import editor_value
 
 STATE_LOCK = RLock()
+MANUAL_MASK_DIR_NAME = "manual_masks"
+HISTORY_DIR_NAME = "history"
+NEAREST_RESAMPLE = getattr(Image, "Resampling", Image).NEAREST
 
 
 def natural_key(value: str) -> list[Any]:
@@ -111,6 +118,32 @@ class TextBox:
     placement: dict[str, float] = field(default_factory=lambda: {"x": 0.5, "y": 0.5})
 
 
+@dataclass
+class ManualMask:
+    id: str
+    pageId: str
+    bbox: dict[str, float]
+    maskFile: str
+    status: str = "pending"
+    createdAt: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+def default_state() -> dict[str, Any]:
+    return {"boxes": [], "manualMasks": [], "undo": [], "redo": []}
+
+
+def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(state, dict):
+        return default_state()
+    if not isinstance(state.get("boxes"), list):
+        state["boxes"] = []
+    if not isinstance(state.get("manualMasks"), list):
+        state["manualMasks"] = []
+    state.setdefault("undo", [])
+    state.setdefault("redo", [])
+    return state
+
+
 def ensure_dirs() -> None:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -193,13 +226,13 @@ def load_state(project_id: str, episode_id: str) -> dict[str, Any]:
     path = state_file(project_id, episode_id)
     with STATE_LOCK:
         if not path.exists() or path.stat().st_size == 0:
-            return {"boxes": [], "undo": [], "redo": []}
+            return default_state()
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return normalize_state(json.loads(path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             corrupt = path.with_suffix(f".corrupt-{uuid4().hex}.json")
             shutil.copy2(path, corrupt)
-            return {"boxes": [], "undo": [], "redo": []}
+            return default_state()
 
 
 def save_state(project_id: str, episode_id: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -287,6 +320,38 @@ def backup_image(project_id: str, episode_id: str, page_id: str) -> Path:
     return target
 
 
+def manual_mask_dir(project_id: str, episode_id: str) -> Path:
+    directory = episode_path(project_id, episode_id) / DATA_DIR_NAME / MANUAL_MASK_DIR_NAME
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def history_dir(project_id: str, episode_id: str) -> Path:
+    directory = episode_path(project_id, episode_id) / DATA_DIR_NAME / HISTORY_DIR_NAME
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def history_entry_dir(project_id: str, episode_id: str, entry_id: str) -> Path:
+    directory = history_dir(project_id, episode_id) / safe_path_part(entry_id, "geçmiş kaydı")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def manual_mask_path(project_id: str, episode_id: str, mask: dict[str, Any] | str) -> Path:
+    if isinstance(mask, dict):
+        filename = mask.get("maskFile") or f"{mask.get('id', '')}.png"
+    else:
+        filename = f"{mask}.png"
+    return manual_mask_dir(project_id, episode_id) / safe_image_name(filename)
+
+
+def history_image_path(project_id: str, episode_id: str, entry: dict[str, Any], key: str) -> Path:
+    entry_id = safe_path_part(entry.get("id", ""), "geçmiş kaydı")
+    filename = safe_image_name(entry.get(key, ""))
+    return history_entry_dir(project_id, episode_id, entry_id) / filename
+
+
 def clamped_box(bbox: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int]:
     left = max(0, math.floor(float(bbox.get("x", 0))))
     top = max(0, math.floor(float(bbox.get("y", 0))))
@@ -304,6 +369,227 @@ def save_image_like_source(image: Image.Image, path: Path) -> None:
         image.save(path)
 
 
+def begin_image_history(
+    project_id: str,
+    episode_id: str,
+    page_id: str,
+    kind: str,
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source = image_path(project_id, episode_id, page_id)
+    entry_id = uuid4().hex
+    before_file = f"before{source.suffix.lower()}"
+    after_file = f"after{source.suffix.lower()}"
+    entry = {
+        "id": entry_id,
+        "pageId": page_id,
+        "type": kind,
+        "beforeFile": before_file,
+        "afterFile": after_file,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    if meta:
+        entry["meta"] = meta
+    shutil.copy2(source, history_image_path(project_id, episode_id, entry, "beforeFile"))
+    return entry
+
+
+def record_image_history(
+    project_id: str,
+    episode_id: str,
+    entry: dict[str, Any],
+    mask_file: str | None = None,
+) -> dict[str, Any]:
+    source = image_path(project_id, episode_id, entry["pageId"])
+    if mask_file:
+        entry["maskFile"] = mask_file
+    entry["completedAt"] = datetime.now(timezone.utc).isoformat()
+    shutil.copy2(source, history_image_path(project_id, episode_id, entry, "afterFile"))
+    state = load_state(project_id, episode_id)
+    state.setdefault("undo", []).append(entry)
+    state["redo"] = []
+    save_state(project_id, episode_id, state)
+    return entry
+
+
+def undo_image_history(project_id: str, episode_id: str) -> dict[str, Any] | None:
+    state = load_state(project_id, episode_id)
+    stack = state.setdefault("undo", [])
+    if not stack:
+        return None
+    entry = stack.pop()
+    source = history_image_path(project_id, episode_id, entry, "beforeFile")
+    if not source.exists():
+        raise FileNotFoundError(f"Geri alma görseli bulunamadı: {source.name}")
+    shutil.copy2(source, image_path(project_id, episode_id, entry["pageId"]))
+    entry["undoneAt"] = datetime.now(timezone.utc).isoformat()
+    apply_history_state_effect(state, entry, "undo")
+    state.setdefault("redo", []).append(entry)
+    save_state(project_id, episode_id, state)
+    return entry
+
+
+def redo_image_history(project_id: str, episode_id: str) -> dict[str, Any] | None:
+    state = load_state(project_id, episode_id)
+    stack = state.setdefault("redo", [])
+    if not stack:
+        return None
+    entry = stack.pop()
+    source = history_image_path(project_id, episode_id, entry, "afterFile")
+    if not source.exists():
+        raise FileNotFoundError(f"Yineleme görseli bulunamadı: {source.name}")
+    shutil.copy2(source, image_path(project_id, episode_id, entry["pageId"]))
+    entry["redoneAt"] = datetime.now(timezone.utc).isoformat()
+    apply_history_state_effect(state, entry, "redo")
+    state.setdefault("undo", []).append(entry)
+    save_state(project_id, episode_id, state)
+    return entry
+
+
+def apply_history_state_effect(state: dict[str, Any], entry: dict[str, Any], action: str) -> None:
+    mask_id = (entry.get("meta") or {}).get("maskId")
+    if not mask_id:
+        return
+    manual_mask = next((item for item in state.setdefault("manualMasks", []) if item.get("id") == mask_id), None)
+    if manual_mask is None:
+        return
+    if entry.get("type") == "manual-inpaint":
+        manual_mask["status"] = "undone" if action == "undo" else "cleaned"
+    if entry.get("type") == "manual-mask-restore":
+        manual_mask["status"] = "cleaned" if action == "undo" else "restored"
+
+
+def add_manual_mask(project_id: str, episode_id: str, page_id: str, mask_payload: str, bbox: dict[str, Any] | None) -> dict[str, Any]:
+    record = save_brush_mask(project_id, episode_id, page_id, mask_payload, bbox)
+    state = load_state(project_id, episode_id)
+    state.setdefault("manualMasks", []).append(record)
+    save_state(project_id, episode_id, state)
+    return record
+
+
+def save_brush_mask(project_id: str, episode_id: str, page_id: str, mask_payload: str, bbox: dict[str, Any] | None) -> dict[str, Any]:
+    edited_path = image_path(project_id, episode_id, page_id)
+    with Image.open(edited_path) as image:
+        page_size = image.size
+    uploaded_mask = decode_mask_image(mask_payload)
+    full_mask, normalized_bbox = compose_full_page_mask(uploaded_mask, bbox, page_size)
+    if full_mask.getbbox() is None:
+        raise ValueError("Fırça maskesi boş.")
+
+    mask_id = uuid4().hex
+    mask_file = f"{mask_id}.png"
+    path = manual_mask_path(project_id, episode_id, mask_file[:-4])
+    full_mask.save(path)
+    return asdict(ManualMask(id=mask_id, pageId=page_id, bbox=normalized_bbox, maskFile=mask_file))
+
+
+def decode_mask_image(mask_payload: str) -> Image.Image:
+    if not isinstance(mask_payload, str) or not mask_payload.strip():
+        raise ValueError("Fırça maskesi alınamadı.")
+    payload = mask_payload.strip()
+    if payload.startswith("data:"):
+        if "," not in payload:
+            raise ValueError("Fırça maskesi formatı geçersiz.")
+        payload = payload.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("Fırça maskesi çözümlenemedi.") from error
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            if image.mode in {"RGBA", "LA"}:
+                mask = image.getchannel("A").copy()
+            else:
+                mask = image.convert("L")
+    except Exception as error:
+        raise ValueError("Fırça maskesi geçerli bir PNG değil.") from error
+    return mask.point(lambda pixel: 255 if pixel > 0 else 0)
+
+
+def compose_full_page_mask(
+    uploaded_mask: Image.Image,
+    bbox: dict[str, Any] | None,
+    page_size: tuple[int, int],
+) -> tuple[Image.Image, dict[str, float]]:
+    width, height = page_size
+    if bbox:
+        left, top, right, bottom = clamped_box(bbox, width, height)
+        target_size = (right - left, bottom - top)
+        if uploaded_mask.size != target_size:
+            uploaded_mask = uploaded_mask.resize(target_size, NEAREST_RESAMPLE)
+        full_mask = Image.new("L", page_size, 0)
+        full_mask.paste(uploaded_mask, (left, top))
+        return full_mask, {"x": float(left), "y": float(top), "w": float(target_size[0]), "h": float(target_size[1])}
+
+    if uploaded_mask.size != page_size:
+        raise ValueError("Fırça maskesi sayfa boyutuyla eşleşmiyor.")
+    return uploaded_mask, {"x": 0.0, "y": 0.0, "w": float(width), "h": float(height)}
+
+
+def update_manual_mask(project_id: str, episode_id: str, mask_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    state = load_state(project_id, episode_id)
+    for mask in state.setdefault("manualMasks", []):
+        if mask.get("id") == mask_id:
+            for key, value in patch.items():
+                if key in {"status", "bbox", "restoredAt", "updatedAt"}:
+                    mask[key] = value
+            save_state(project_id, episode_id, state)
+            return mask
+    return None
+
+
+def manual_mask_overlay(project_id: str, episode_id: str, mask_id: str) -> BytesIO | None:
+    state = load_state(project_id, episode_id)
+    mask_record = next((item for item in state.setdefault("manualMasks", []) if item.get("id") == mask_id), None)
+    if mask_record is None:
+        return None
+    path = manual_mask_path(project_id, episode_id, mask_record)
+    if not path.exists():
+        raise FileNotFoundError(f"Fırça maskesi bulunamadı: {path.name}")
+    with Image.open(path) as mask_image:
+        mask = mask_image.convert("L")
+        alpha = mask.point(lambda pixel: 118 if pixel > 0 else 0)
+        overlay = Image.new("RGBA", mask.size, (231, 189, 84, 0))
+        overlay.putalpha(alpha)
+        buffer = BytesIO()
+        overlay.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+
+
+def paste_original_with_mask(project_id: str, episode_id: str, page_id: str, mask_path: Path) -> None:
+    edited_path = image_path(project_id, episode_id, page_id)
+    source_path = original_image_path(project_id, episode_id, page_id)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
+    if not mask_path.exists():
+        raise FileNotFoundError(f"Fırça maskesi bulunamadı: {mask_path.name}")
+
+    with Image.open(edited_path) as edited_image, Image.open(source_path) as original_image, Image.open(mask_path) as mask_image:
+        edited = edited_image.convert("RGBA")
+        original = original_image.convert("RGBA")
+        mask = mask_image.convert("L")
+        width = min(edited.width, original.width, mask.width)
+        height = min(edited.height, original.height, mask.height)
+        if width <= 0 or height <= 0:
+            raise ValueError("Fırça maskesi alanı geçersiz.")
+        edited.paste(original.crop((0, 0, width, height)), (0, 0), mask.crop((0, 0, width, height)))
+        save_image_like_source(edited, edited_path)
+
+
+def restore_brush_from_original(
+    project_id: str,
+    episode_id: str,
+    page_id: str,
+    mask_payload: str,
+    bbox: dict[str, Any] | None,
+) -> dict[str, Any]:
+    mask_record = save_brush_mask(project_id, episode_id, page_id, mask_payload, bbox)
+    paste_original_with_mask(project_id, episode_id, page_id, manual_mask_path(project_id, episode_id, mask_record))
+    mask_record["status"] = "restored"
+    return mask_record
+
+
 def restore_box_from_original(project_id: str, episode_id: str, box_id: str) -> dict[str, Any] | None:
     state = load_state(project_id, episode_id)
     box = next((item for item in state["boxes"] if item["id"] == box_id), None)
@@ -315,6 +601,7 @@ def restore_box_from_original(project_id: str, episode_id: str, box_id: str) -> 
     if not source_path.exists():
         raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
 
+    history = begin_image_history(project_id, episode_id, box["pageId"], "box-restore", {"boxId": box_id})
     backup_image(project_id, episode_id, box["pageId"])
     with Image.open(edited_path) as edited_image, Image.open(source_path) as original_image:
         edited = edited_image.convert("RGBA")
@@ -330,7 +617,34 @@ def restore_box_from_original(project_id: str, episode_id: str, box_id: str) -> 
 
     box["status"] = "restored"
     save_state(project_id, episode_id, state)
+    record_image_history(project_id, episode_id, history)
     return box
+
+
+def restore_manual_mask_from_original(project_id: str, episode_id: str, mask_id: str) -> dict[str, Any] | None:
+    state = load_state(project_id, episode_id)
+    mask_record = next((item for item in state.setdefault("manualMasks", []) if item.get("id") == mask_id), None)
+    if mask_record is None:
+        return None
+
+    page_id = mask_record["pageId"]
+    edited_path = image_path(project_id, episode_id, page_id)
+    source_path = original_image_path(project_id, episode_id, page_id)
+    stored_mask_path = manual_mask_path(project_id, episode_id, mask_record)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
+    if not stored_mask_path.exists():
+        raise FileNotFoundError(f"Fırça maskesi bulunamadı: {stored_mask_path.name}")
+
+    history = begin_image_history(project_id, episode_id, page_id, "manual-mask-restore", {"maskId": mask_id})
+    backup_image(project_id, episode_id, page_id)
+    paste_original_with_mask(project_id, episode_id, page_id, stored_mask_path)
+
+    mask_record["status"] = "restored"
+    mask_record["restoredAt"] = datetime.now(timezone.utc).isoformat()
+    save_state(project_id, episode_id, state)
+    record_image_history(project_id, episode_id, history, mask_record.get("maskFile"))
+    return mask_record
 
 
 def render_texts(project_id: str, episode_id: str, page_id: str, boxes: list[dict[str, Any]]) -> None:
@@ -345,7 +659,7 @@ def render_texts(project_id: str, episode_id: str, page_id: str, boxes: list[dic
                 continue
             bbox = box["bbox"]
             style = box.get("style") or {}
-            text_layer = transform_text_layer(draw_text_layer(text, bbox, style), style)
+            text_layer = transform_text_layer(draw_text_layer(text, bbox, style, allow_overflow=not has_custom_box_corners(box)), style)
             warped = warp_text_layer(text_layer, box)
             if warped:
                 paste_rgba(image, warped[0], warped[1], warped[2])
@@ -356,27 +670,34 @@ def render_texts(project_id: str, episode_id: str, page_id: str, boxes: list[dic
         image.convert("RGB").save(path)
 
 
-def draw_text_layer(text: str, bbox: dict[str, Any], style: dict[str, Any]) -> Image.Image:
+def draw_text_layer(text: str, bbox: dict[str, Any], style: dict[str, Any], allow_overflow: bool = True) -> Image.Image:
     width = max(1, int(float(bbox["w"])))
     height = max(1, int(float(bbox["h"])))
-    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    size = int(style.get("fontSize", 28))
+    size = positive_int(style.get("fontSize"), 6, 240, 28)
     stroke_width = int(style.get("strokeWidth", 1))
     font = load_font(size, bool(style.get("bold")), style.get("fontFamily", "noto-sans-black"))
-    lines = layout_text_lines(draw, text, font, max(1, width - 12))
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1), (0, 0, 0, 0)))
+    lines = layout_text_lines(measure, text, font, max(1, width - 12))
     line_height = int(size * float(style.get("lineHeight", 1.1)))
     total_height = line_height * len(lines)
-    y = int((height - total_height) / 2)
+    max_line_width = max((measure.textlength(line, font=font) if line else 0 for line in lines), default=0)
+    padding_x = padding_y = 0
+    if allow_overflow:
+        stroke_padding = max(8, stroke_width * 4)
+        padding_x = int(max(size + stroke_padding, (max_line_width - width) / 2 + stroke_padding, 24))
+        padding_y = int(max(size + stroke_padding, (total_height - height) / 2 + stroke_padding, 24))
+    layer = Image.new("RGBA", (width + padding_x * 2, height + padding_y * 2), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    y = int(padding_y + (height - total_height) / 2)
     for line in lines:
         line_width = draw.textlength(line, font=font) if line else 0
         align = style.get("align", "center")
         if align == "left":
-            x = 6
+            x = padding_x + 6
         elif align == "right":
-            x = width - line_width - 6
+            x = padding_x + width - line_width - 6
         else:
-            x = int((width - line_width) / 2)
+            x = int(padding_x + (width - line_width) / 2)
         if line:
             draw.text(
                 (x, y),
@@ -556,6 +877,16 @@ def clamp_float(value: Any, minimum: float, maximum: float, fallback: float) -> 
     except (TypeError, ValueError):
         return fallback
     return min(max(parsed, minimum), maximum)
+
+
+def positive_int(value: Any, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(parsed) or parsed <= 0:
+        return fallback
+    return int(min(max(parsed, minimum), maximum))
 
 
 def load_font(size: int, bold: bool = False, font_family: str = "noto-sans-black") -> ImageFont.FreeTypeFont:

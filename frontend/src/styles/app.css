@@ -92,6 +92,101 @@ button {
   justify-content: center;
 }
 
+.job-status {
+  width: clamp(260px, 24vw, 430px);
+  min-width: 220px;
+  display: grid;
+  gap: 6px;
+  align-self: center;
+}
+
+.job-status.empty {
+  visibility: hidden;
+}
+
+.job-status div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.job-status span {
+  color: #e7bd54;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.job-status strong {
+  overflow: hidden;
+  color: #dbe1e6;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-status em {
+  color: #98a3ad;
+  font-style: normal;
+}
+
+.job-status b {
+  height: 3px;
+  background: #242a32;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.job-status i {
+  display: block;
+  height: 100%;
+  background: #45d483;
+}
+
+.job-status.failed i {
+  background: #ff6b6b;
+}
+
+.brush-toolbar {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  color: #c8d0d7;
+  background: #151a20;
+  border: 1px solid #303843;
+  border-radius: 7px;
+}
+
+.brush-toolbar .tool {
+  width: 32px;
+  height: 30px;
+}
+
+.brush-toolbar label {
+  display: grid;
+  grid-template-columns: 44px 112px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.brush-toolbar input {
+  width: 112px;
+  height: 24px;
+  padding: 0;
+}
+
+.restore-toolbar > span {
+  color: #dbe1e6;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .top-actions {
   display: flex;
   align-items: center;
@@ -157,7 +252,7 @@ button {
   border-left: 1px solid #272d35;
   overflow: hidden;
   display: grid;
-  grid-template-rows: auto minmax(118px, 1fr) auto auto minmax(92px, 0.55fr);
+  grid-template-rows: auto minmax(112px, 0.42fr) minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -197,14 +292,12 @@ textarea {
 }
 
 .page-list,
-.box-list,
-.job-list {
+.box-list {
   display: grid;
   gap: 8px;
 }
 
-.box-list,
-.job-list {
+.box-list {
   min-height: 0;
   overflow: auto;
   align-content: start;
@@ -240,6 +333,16 @@ textarea {
 .box-row.active {
   border-color: #e7bd54;
   background: #2d2a20;
+}
+
+.box-row.selected {
+  border-color: #45d483;
+  background: #1f2f29;
+}
+
+.box-row.selected.active {
+  border-color: #e7bd54;
+  box-shadow: inset 3px 0 0 #45d483;
 }
 
 .editor-stage {
@@ -361,6 +464,51 @@ textarea {
   font-style: normal;
 }
 
+.page-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-tool {
+  min-width: 28px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: #edf0f2;
+  background: #242a32;
+  border: 1px solid #303843;
+  border-radius: 6px;
+}
+
+.page-tool:not(.text) {
+  width: 28px;
+  padding: 0;
+}
+
+.page-tool:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.brush-floating-actions {
+  position: fixed;
+  right: 386px;
+  bottom: 22px;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(24, 28, 34, 0.94);
+  border: 1px solid #394452;
+  border-radius: 8px;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.42);
+}
+
 .canvas-page {
   position: relative;
   margin: 0 auto;
@@ -375,6 +523,37 @@ textarea {
 
 .canvas-page.tool-box {
   cursor: crosshair;
+}
+
+.brush-mask-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.canvas-page.tool-brush .brush-mask-canvas {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+.canvas-page.tool-brush.brush-erase .brush-mask-canvas {
+  cursor: cell;
+}
+
+.canvas-page.tool-restore .brush-mask-canvas {
+  cursor: cell;
+  pointer-events: auto;
+}
+
+.restore-mask-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .overlay {
@@ -397,6 +576,87 @@ textarea {
 .box.active {
   border-color: #e7bd54;
   background: rgba(231, 189, 84, 0.12);
+}
+
+.box.selected {
+  border-color: #45d483;
+  background: rgba(69, 212, 131, 0.11);
+}
+
+.box.selected.active {
+  border-color: #e7bd54;
+  box-shadow: 0 0 0 2px rgba(69, 212, 131, 0.7);
+}
+
+.resize-handles {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+
+.resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  background: #101216;
+  border: 2px solid #e7bd54;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(16, 18, 22, 0.6);
+  pointer-events: auto;
+}
+
+.resize-handle.nw {
+  left: -7px;
+  top: -7px;
+  cursor: nwse-resize;
+}
+
+.resize-handle.n {
+  left: 50%;
+  top: -7px;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.resize-handle.ne {
+  right: -7px;
+  top: -7px;
+  cursor: nesw-resize;
+}
+
+.resize-handle.e {
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.resize-handle.se {
+  right: -7px;
+  bottom: -7px;
+  cursor: nwse-resize;
+}
+
+.resize-handle.s {
+  left: 50%;
+  bottom: -7px;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.resize-handle.sw {
+  left: -7px;
+  bottom: -7px;
+  cursor: nesw-resize;
+}
+
+.resize-handle.w {
+  left: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: ew-resize;
 }
 
 .box.draft {
@@ -478,6 +738,13 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.detail-head span {
+  display: block;
+  margin-top: 3px;
+  color: #98a3ad;
+  font-size: 12px;
 }
 
 .detail h2 {
@@ -853,6 +1120,11 @@ textarea {
     bottom: 0;
     width: min(360px, 92vw);
     box-shadow: -20px 0 40px rgba(0, 0, 0, 0.35);
+  }
+
+  .brush-floating-actions {
+    right: 18px;
+    bottom: 18px;
   }
 }
 

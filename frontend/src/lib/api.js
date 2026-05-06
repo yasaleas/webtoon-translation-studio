@@ -17,6 +17,10 @@ export const api = {
     const params = new URLSearchParams({ projectId, episodeId });
     return `${API_BASE}/api/pages/${encodeURIComponent(pageId)}/image?${params}`;
   },
+  manualMaskOverlayUrl(projectId, episodeId, maskId) {
+    const params = new URLSearchParams({ projectId, episodeId });
+    return `${API_BASE}/api/manual-masks/${encodeURIComponent(maskId)}/overlay?${params}`;
+  },
   projects: () => request("/api/projects"),
   episodes: (projectId) => request(`/api/projects/${encodeURIComponent(projectId)}/episodes`),
   openSession: (projectId, episodeId) =>
@@ -41,6 +45,11 @@ export const api = {
     }),
   restoreBox: (session, boxId) =>
     request(`/api/boxes/${boxId}/restore-original`, {
+      method: "POST",
+      body: JSON.stringify(session),
+    }),
+  restoreManualMask: (session, maskId) =>
+    request(`/api/manual-masks/${maskId}/restore-original`, {
       method: "POST",
       body: JSON.stringify(session),
     }),
@@ -76,5 +85,25 @@ export const api = {
     request(`/api/jobs/${type}`, {
       method: "POST",
       body: JSON.stringify({ ...session, ...extra }),
+    }),
+  manualInpaint: (session, pageId, mask, bbox) =>
+    request("/api/jobs/manual-inpaint", {
+      method: "POST",
+      body: JSON.stringify({ ...session, pageId, mask, bbox }),
+    }),
+  restoreBrush: (session, pageId, mask, bbox) =>
+    request("/api/jobs/restore-brush", {
+      method: "POST",
+      body: JSON.stringify({ ...session, pageId, mask, bbox }),
+    }),
+  undo: (session) =>
+    request("/api/history/undo", {
+      method: "POST",
+      body: JSON.stringify(session),
+    }),
+  redo: (session) =>
+    request("/api/history/redo", {
+      method: "POST",
+      body: JSON.stringify(session),
     }),
 };

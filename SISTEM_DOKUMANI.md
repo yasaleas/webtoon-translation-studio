@@ -52,15 +52,16 @@ Ayar menusu su alanlari yonetir:
 - RT-DETR model, tespit esigi ve hedef label secimi.
 - OCR dili.
 - IOPaint modeli, cihaz ve maske payi.
+- Opsiyonel reader senkronizasyon hedefi.
 
-Onerilen secret yontemi proje kokundeki `.env` dosyasidir. Gercek key `GEMINI_API_KEY` olarak `.env` icinde tutulur; `.env` GitHub'a gonderilmez. Yerel font yollari da `.env` icinde `WEBTOON_TIGHT_SPOT_BB_PATH` gibi degiskenlerle tutulur veya fontlar arayuzden yuklenir. Ayarlar menusundeki key kaydetme destegi yalniz yerel yedek kullanim icindir ve `data/settings.json` dosyasinda kalir. `.env` icinde key varsa backend once onu kullanir.
+Gemini key ve kullanici fontlari arayuzden eklenir. Bu degerler yerel `data/settings.json` ve `data/fonts/` altinda kalir; GitHub'a gonderilmez. Ortam degiskenleri ileri kullanim icin desteklenir, fakat temel kurulum icin ayri bir `.env` dosyasi gerekli degildir.
 
 ## 7. Guvenlik ve GitHub Hazirligi
 
 GitHub'a yayinlamadan once su kurallar uygulanmalidir:
 
 - Gercek API key, token veya ozel gorsel commitlenmemelidir.
-- `.gitignore` `data/settings.json`, `data/projects/`, `data/fonts/`, `.venv*`, `node_modules/` ve `dist/` klasorlerini disarida birakir.
+- `.gitignore` `data/settings.json`, `data/projects/`, `data/fonts/`, `.venv*`, `node_modules/`, `dist/` ve kisisel `reader/` klasorlerini disarida birakir.
 - Flask varsayilan olarak `127.0.0.1` uzerinden calisir. Dis agdan erisim icin bilincli olarak `WEBTOON_HOST=0.0.0.0` verilmelidir.
 - CORS varsayilan olarak sadece yerel Vite adreslerine aciktir. Gerekirse `WEBTOON_CORS_ORIGINS` ile sinirli origin listesi verilir.
 - API path parametrelerinde mutlak path, `..`, `/` ve `\` reddedilir. Bu, proje disi dosyalara erisim riskini azaltir.

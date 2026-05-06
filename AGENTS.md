@@ -49,4 +49,4 @@ This workspace is not currently a Git repository, so no project-specific commit 
 
 ## Security & Configuration Tips
 
-Keep Gemini API keys out of source files. Prefer `.env` with `GEMINI_API_KEY`; keep `.env` local and commit only `.env.example`. Avoid committing generated files under `data/projects/`, `data/settings.json`, `.venv*`, and `dist/` unless explicitly needed.
+Keep Gemini API keys out of source files. User-facing configuration is managed from the settings UI and stored locally in ignored runtime files such as `data/settings.json`. Avoid committing generated files under `data/projects/`, `data/settings.json`, `data/fonts/`, `.venv*`, `dist/`, and the personal `reader/` workspace unless explicitly needed.

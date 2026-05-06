@@ -15,8 +15,12 @@ from .storage import (
     list_episodes,
     list_projects,
     load_state,
+    manual_mask_overlay,
     page_records,
+    redo_image_history,
     restore_box_from_original,
+    restore_manual_mask_from_original,
+    undo_image_history,
     update_box,
 )
 
@@ -151,6 +155,53 @@ def create_app() -> Flask:
             return {"error": "box not found"}, 404
         return jsonify(box)
 
+    @app.post("/api/manual-masks/<mask_id>/restore-original")
+    def restore_manual_mask(mask_id: str):
+        payload = request.get_json(force=True)
+        try:
+            mask = restore_manual_mask_from_original(payload["projectId"], payload["episodeId"], mask_id)
+        except FileNotFoundError as error:
+            return {"error": str(error)}, 404
+        except ValueError as error:
+            return {"error": str(error)}, 400
+        if mask is None:
+            return {"error": "manual mask not found"}, 404
+        return jsonify(mask)
+
+    @app.get("/api/manual-masks/<mask_id>/overlay")
+    def manual_mask_overlay_image(mask_id: str):
+        try:
+            buffer = manual_mask_overlay(request.args["projectId"], request.args["episodeId"], mask_id)
+        except FileNotFoundError as error:
+            return {"error": str(error)}, 404
+        except ValueError as error:
+            return {"error": str(error)}, 400
+        if buffer is None:
+            return {"error": "manual mask not found"}, 404
+        return send_file(buffer, mimetype="image/png")
+
+    @app.post("/api/history/undo")
+    def undo_history():
+        payload = request.get_json(force=True)
+        try:
+            entry = undo_image_history(payload["projectId"], payload["episodeId"])
+        except FileNotFoundError as error:
+            return {"error": str(error)}, 404
+        if entry is None:
+            return {"error": "undo stack empty"}, 404
+        return jsonify(entry)
+
+    @app.post("/api/history/redo")
+    def redo_history():
+        payload = request.get_json(force=True)
+        try:
+            entry = redo_image_history(payload["projectId"], payload["episodeId"])
+        except FileNotFoundError as error:
+            return {"error": str(error)}, 404
+        if entry is None:
+            return {"error": "redo stack empty"}, 404
+        return jsonify(entry)
+
     @app.get("/api/jobs")
     def list_job_records():
         return jsonify(jobs.list_jobs())
@@ -169,6 +220,32 @@ def create_app() -> Flask:
     def inpaint():
         payload = request.get_json(force=True)
         return jsonify(jobs.inpaint(payload["projectId"], payload["episodeId"], payload.get("boxIds")))
+
+    @app.post("/api/jobs/manual-inpaint")
+    def manual_inpaint():
+        payload = request.get_json(force=True)
+        return jsonify(
+            jobs.manual_inpaint(
+                payload["projectId"],
+                payload["episodeId"],
+                payload["pageId"],
+                payload["mask"],
+                payload.get("bbox"),
+            )
+        )
+
+    @app.post("/api/jobs/restore-brush")
+    def restore_brush():
+        payload = request.get_json(force=True)
+        return jsonify(
+            jobs.restore_brush(
+                payload["projectId"],
+                payload["episodeId"],
+                payload["pageId"],
+                payload["mask"],
+                payload.get("bbox"),
+            )
+        )
 
     @app.post("/api/jobs/translate")
     def translate():

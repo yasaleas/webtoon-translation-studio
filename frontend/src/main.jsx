@@ -9,6 +9,7 @@ import {
   FileImage,
   Languages,
   MousePointer2,
+  Paintbrush,
   Plus,
   RefreshCcw,
   Save,
@@ -80,9 +81,13 @@ function App() {
   const [session, setSession] = useState(emptySession);
   const [pages, setPages] = useState([]);
   const [boxes, setBoxes] = useState([]);
+  const [manualMasks, setManualMasks] = useState([]);
   const [activePageId, setActivePageId] = useState("");
   const [activeBoxId, setActiveBoxId] = useState("");
+  const [selectedBoxIds, setSelectedBoxIds] = useState([]);
   const [tool, setTool] = useState("select");
+  const [brushSize, setBrushSize] = useState(36);
+  const [brushMode, setBrushMode] = useState("paint");
   const [zoom, setZoom] = useState(0.62);
   const [jobs, setJobs] = useState([]);
   const [fonts, setFonts] = useState([]);
@@ -128,7 +133,7 @@ function App() {
   }, [session.projectId]);
 
   useEffect(() => {
-    const timer = setInterval(() => api.jobs().then(setJobs).catch(() => {}), 1800);
+    const timer = setInterval(() => api.jobs().then(setJobs).catch(() => {}), 850);
     return () => clearInterval(timer);
   }, []);
 
@@ -137,17 +142,42 @@ function App() {
     [pages, activePageId],
   );
   const orderedBoxes = useMemo(() => orderBoxesByReadingPosition(boxes, pages), [boxes, pages]);
-  const activeBox = boxes.find((box) => box.id === activeBoxId) || orderedBoxes[0];
+  const validSelectedBoxIds = useMemo(() => {
+    const ids = new Set(boxes.map((box) => box.id));
+    return selectedBoxIds.filter((id) => ids.has(id));
+  }, [boxes, selectedBoxIds]);
+  const activeBox = boxes.find((box) => box.id === activeBoxId) || boxes.find((box) => validSelectedBoxIds.includes(box.id)) || orderedBoxes[0];
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (isEditableTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undoImageEdit().catch((error) => setNotice(error.message));
+      }
+      if (key === "y" || (key === "z" && event.shiftKey)) {
+        event.preventDefault();
+        redoImageEdit().catch((error) => setNotice(error.message));
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [session.projectId, session.episodeId]);
 
   async function openSession(projectId = session.projectId, episodeId = session.episodeId) {
     if (!projectId || !episodeId) return;
     const data = await api.openSession(projectId, episodeId);
     const ordered = orderBoxesByReadingPosition(data.state.boxes || [], data.pages);
+    const orderedMasks = orderManualMasks(data.state.manualMasks || [], data.pages);
     setSession({ projectId, episodeId });
     setPages(data.pages);
     setBoxes(ordered);
+    setManualMasks(orderedMasks);
     setActivePageId(data.pages[0]?.id || "");
     setActiveBoxId(ordered[0]?.id || "");
+    setSelectedBoxIds(ordered[0]?.id ? [ordered[0].id] : []);
     setNotice("");
   }
 
@@ -155,10 +185,13 @@ function App() {
     if (!session.projectId || !session.episodeId) return;
     const data = await api.openSession(session.projectId, session.episodeId);
     const ordered = orderBoxesByReadingPosition(data.state.boxes || [], data.pages);
+    const orderedMasks = orderManualMasks(data.state.manualMasks || [], data.pages);
     setPages(data.pages);
     setBoxes(ordered);
+    setManualMasks(orderedMasks);
+    setSelectedBoxIds((current) => current.filter((id) => ordered.some((box) => box.id === id)));
     setJobs(await api.jobs());
-    return { pages: data.pages, boxes: ordered };
+    return { pages: data.pages, boxes: ordered, manualMasks: orderedMasks };
   }
 
   async function runJob(type, extra = {}) {
@@ -176,6 +209,7 @@ function App() {
     await refreshState();
     setActivePageId(pageId);
     setActiveBoxId(box.id);
+    setSelectedBoxIds([box.id]);
     setTool("select");
   }
 
@@ -192,9 +226,46 @@ function App() {
     }
   }
 
-  async function removeBox(boxId) {
-    await api.deleteBox(session, boxId);
-    setBoxes((items) => orderBoxesByReadingPosition(items.filter((item) => item.id !== boxId), pages));
+  async function patchBoxForSelection(boxId, patch, options = {}) {
+    const ids = actionBoxIds(boxId);
+    const patchKeys = Object.keys(patch);
+    const canBatch = ids.length > 1 && patch.style && patchKeys.every((key) => key === "style" || key === "corners");
+    if (canBatch) {
+      const currentBox = boxes.find((item) => item.id === boxId);
+      const stylePatch = options.stylePatch || diffTextStyle(patch.style, currentBox?.style || {});
+      const hasStylePatch = Object.keys(stylePatch).length > 0;
+      const hasCorners = Object.prototype.hasOwnProperty.call(patch, "corners");
+      if (!hasStylePatch && !hasCorners) return null;
+      setBoxes((items) => orderBoxesByReadingPosition(items.map((item) => {
+        if (!ids.includes(item.id)) return item;
+        return {
+          ...item,
+          ...(hasCorners ? { corners: patch.corners } : {}),
+          ...(hasStylePatch ? { style: { ...(item.style || {}), ...stylePatch } } : {}),
+        };
+      }), pages));
+      try {
+        if (hasStylePatch) await api.applyStyle(session, stylePatch, ids);
+        if (hasCorners) {
+          await Promise.all(ids.map((id) => api.updateBox(session, id, { corners: patch.corners })));
+        }
+        await refreshState();
+      } catch (error) {
+        setNotice(error.message);
+        await refreshState();
+        throw error;
+      }
+      return null;
+    }
+    return patchBox(boxId, patch);
+  }
+
+  async function removeBoxes(boxIds) {
+    for (const boxId of boxIds) {
+      await api.deleteBox(session, boxId);
+    }
+    setBoxes((items) => orderBoxesByReadingPosition(items.filter((item) => !boxIds.includes(item.id)), pages));
+    setSelectedBoxIds((items) => items.filter((id) => !boxIds.includes(id)));
     setActiveBoxId("");
   }
 
@@ -204,6 +275,89 @@ function App() {
     setImageVersion(Date.now());
     setActiveBoxId(boxId);
     setNotice("");
+  }
+
+  async function restoreBoxes(boxIds) {
+    for (const boxId of boxIds) {
+      await api.restoreBox(session, boxId);
+    }
+    setImageVersion(Date.now());
+    await refreshState();
+    setActiveBoxId(boxIds[0] || "");
+    setSelectedBoxIds(boxIds);
+    setNotice("");
+  }
+
+  async function manualInpaint(pageId, maskPayload) {
+    if (!session.projectId || !session.episodeId) return;
+    try {
+      const result = await api.manualInpaint(session, pageId, maskPayload.mask, maskPayload.bbox);
+      setJobs((items) => [result, ...items.filter((item) => item.id !== result.id)]);
+      setImageVersion(Date.now());
+      await refreshState();
+      if (result.status === "failed") {
+        throw new Error(result.message || "Fırça temizliği başarısız oldu.");
+      }
+      setNotice("");
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    }
+  }
+
+  async function restoreBrush(pageId, maskPayload) {
+    if (!session.projectId || !session.episodeId) return;
+    try {
+      const result = await api.restoreBrush(session, pageId, maskPayload.mask, maskPayload.bbox);
+      setJobs((items) => [result, ...items.filter((item) => item.id !== result.id)]);
+      setImageVersion(Date.now());
+      await refreshState();
+      if (result.status === "failed") {
+        throw new Error(result.message || "Orijinal pikseller geri getirilemedi.");
+      }
+      setNotice("");
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    }
+  }
+
+  async function undoImageEdit() {
+    if (!session.projectId || !session.episodeId) return;
+    await api.undo(session);
+    setImageVersion(Date.now());
+    await refreshState();
+    setNotice("");
+  }
+
+  async function redoImageEdit() {
+    if (!session.projectId || !session.episodeId) return;
+    await api.redo(session);
+    setImageVersion(Date.now());
+    await refreshState();
+    setNotice("");
+  }
+
+  function actionBoxIds(boxId = activeBoxId) {
+    if (boxId && validSelectedBoxIds.includes(boxId)) return validSelectedBoxIds;
+    return boxId ? [boxId] : validSelectedBoxIds;
+  }
+
+  function selectBox(boxId, pageId, additive = false, scrollType = "inspector", preserveSelection = false) {
+    setActivePageId(pageId);
+    setActiveBoxId(boxId);
+    setWarpEditBoxId((current) => (current && current !== boxId ? "" : current));
+    setSelectedBoxIds((current) => {
+      if (preserveSelection && current.includes(boxId)) return current;
+      if (!additive) return [boxId];
+      const base = current.length ? current : activeBoxId ? [activeBoxId] : [];
+      if (base.includes(boxId)) {
+        const next = base.filter((id) => id !== boxId);
+        return next.length ? next : [boxId];
+      }
+      return [...base, boxId];
+    });
+    setScrollTarget({ type: scrollType, boxId, pageId, nonce: Date.now() });
   }
 
   async function toggleWarpEdit(box) {
@@ -270,9 +424,23 @@ function App() {
             <small>Yerel çeviri ve düzenleme stüdyosu</small>
           </div>
         </div>
+        <JobStatusBar jobs={jobs} />
         <div className="toolbar">
           <ToolButton active={tool === "select"} icon={MousePointer2} label="Seç" onClick={() => setTool("select")} />
           <ToolButton active={tool === "box"} icon={BoxSelect} label="Yazı alanı çiz" onClick={() => setTool("box")} />
+          <ToolButton active={tool === "brush"} icon={Paintbrush} label="Fırça ile temizle" onClick={() => setTool("brush")} />
+          <ToolButton active={tool === "restore"} icon={Eraser} label="Orijinal silgisi" onClick={() => setTool("restore")} />
+          {tool === "brush" ? (
+            <BrushToolbar
+              size={brushSize}
+              mode={brushMode}
+              onSizeChange={setBrushSize}
+              onModeChange={setBrushMode}
+            />
+          ) : null}
+          {tool === "restore" ? (
+            <RestoreToolbar size={brushSize} onSizeChange={setBrushSize} />
+          ) : null}
           <ToolButton icon={ZoomOut} label="Uzaklaş" onClick={() => setZoom((value) => Math.max(0.3, value - 0.08))} />
           <span className="zoom-label">{Math.round(zoom * 100)}%</span>
           <ToolButton icon={ZoomIn} label="Yakınlaş" onClick={() => setZoom((value) => Math.min(1.4, value + 0.08))} />
@@ -332,22 +500,24 @@ function App() {
               session={session}
               pages={pages}
               boxes={boxes}
+              manualMasks={manualMasks}
               activePageId={activePage.id}
               activeBoxId={activeBoxId}
+              selectedBoxIds={validSelectedBoxIds}
               tool={tool}
               zoom={zoom}
+              brushSize={brushSize}
+              brushMode={brushMode}
               imageVersion={imageVersion}
               scrollTarget={scrollTarget}
               warpEditBoxId={warpEditBoxId}
               onCreateBox={createBox}
+              onManualInpaint={manualInpaint}
+              onRestoreBrush={restoreBrush}
+              onBrushError={(message) => setNotice(message)}
               onSelectPage={setActivePageId}
-              onSelectBox={(boxId, pageId) => {
-                setActivePageId(pageId);
-                setActiveBoxId(boxId);
-                setWarpEditBoxId((current) => (current && current !== boxId ? "" : current));
-                setScrollTarget({ type: "inspector", boxId, nonce: Date.now() });
-              }}
-              onPatchBox={patchBox}
+              onSelectBox={(boxId, pageId, additive, preserveSelection) => selectBox(boxId, pageId, additive, "inspector", preserveSelection)}
+              onPatchBox={patchBoxForSelection}
               fonts={fonts}
             />
           ) : (
@@ -358,24 +528,21 @@ function App() {
         <Inspector
           box={activeBox}
           boxes={orderedBoxes}
+          selectedBoxIds={validSelectedBoxIds}
           pages={pages}
-          jobs={jobs}
           fonts={fonts}
           scrollTarget={scrollTarget}
-          onSelect={(boxId) => {
+          onSelect={(boxId, additive, preserveSelection) => {
             const selected = boxes.find((item) => item.id === boxId);
-            if (selected) setActivePageId(selected.pageId);
-            setActiveBoxId(boxId);
-            setWarpEditBoxId((current) => (current && current !== boxId ? "" : current));
-            setScrollTarget({ type: "canvas", boxId, pageId: selected?.pageId, nonce: Date.now() });
+            if (selected) selectBox(boxId, selected.pageId, additive, "canvas", preserveSelection);
           }}
-          onPatch={patchBox}
-          onDelete={removeBox}
-          onSingleOcr={(box) => runJob("ocr", { boxIds: [box.id] })}
-          onSingleInpaint={(box) => runJob("inpaint", { boxIds: [box.id] })}
-          onSinglePlace={(box) => runJob("place", { boxIds: [box.id] })}
-          onSingleUnplace={(box) => runJob("unplace", { boxIds: [box.id] })}
-          onRestoreOriginal={(box) => restoreBox(box.id).catch((error) => setNotice(error.message))}
+          onPatch={patchBoxForSelection}
+          onDelete={(box) => removeBoxes(actionBoxIds(box.id)).catch((error) => setNotice(error.message))}
+          onSingleOcr={(box) => runJob("ocr", { boxIds: actionBoxIds(box.id) })}
+          onSingleInpaint={(box) => runJob("inpaint", { boxIds: actionBoxIds(box.id) })}
+          onSinglePlace={(box) => runJob("place", { boxIds: actionBoxIds(box.id) })}
+          onSingleUnplace={(box) => runJob("unplace", { boxIds: actionBoxIds(box.id) })}
+          onRestoreOriginal={(box) => restoreBoxes(actionBoxIds(box.id)).catch((error) => setNotice(error.message))}
           warpEditBoxId={warpEditBoxId}
           onToggleWarpEdit={toggleWarpEdit}
         />
@@ -451,18 +618,66 @@ function ActionBar({ targetLanguage, setTargetLanguage, fonts, defaultFont, onDe
   );
 }
 
+function JobStatusBar({ jobs }) {
+  const job = visibleJob(jobs);
+  if (!job) return <div className="job-status empty" aria-hidden="true" />;
+  const progress = clamp(Number(job.progress || 0), 0, 100);
+  return (
+    <div className={`job-status ${job.status}`}>
+      <div>
+        <span>{jobLabel(job.type)}</span>
+        <strong>{job.message || job.status}</strong>
+        <em>{Math.round(progress)}%</em>
+      </div>
+      <b><i style={{ width: `${progress}%` }} /></b>
+    </div>
+  );
+}
+
+function BrushToolbar({ size, mode, onSizeChange, onModeChange }) {
+  return (
+    <div className="brush-toolbar">
+      <ToolButton active={mode === "paint"} icon={Paintbrush} label="Maske boya" onClick={() => onModeChange("paint")} />
+      <ToolButton active={mode === "erase"} icon={Eraser} label="Maske silgisi" onClick={() => onModeChange("erase")} />
+      <label>
+        <span>{size}px</span>
+        <input type="range" min="6" max="110" step="2" value={size} onChange={(event) => onSizeChange(Number(event.target.value))} />
+      </label>
+    </div>
+  );
+}
+
+function RestoreToolbar({ size, onSizeChange }) {
+  return (
+    <div className="brush-toolbar restore-toolbar">
+      <span>Orijinal silgisi</span>
+      <label>
+        <span>{size}px</span>
+        <input type="range" min="6" max="110" step="2" value={size} onChange={(event) => onSizeChange(Number(event.target.value))} />
+      </label>
+    </div>
+  );
+}
+
 function WebtoonReader({
   session,
   pages,
   boxes,
+  manualMasks,
   activePageId,
   activeBoxId,
+  selectedBoxIds,
   tool,
   zoom,
+  brushSize,
+  brushMode,
   imageVersion,
   scrollTarget,
   warpEditBoxId,
   onCreateBox,
+  onManualInpaint,
+  onRestoreBrush,
+  onBrushError,
   onSelectPage,
   onSelectBox,
   onPatchBox,
@@ -494,10 +709,14 @@ function WebtoonReader({
             page={page}
             pageIndex={index}
             boxes={orderBoxesByReadingPosition(boxes.filter((box) => box.pageId === page.id), [page])}
+            manualMasks={manualMasks.filter((mask) => mask.pageId === page.id && mask.status === "cleaned")}
             active={activePageId === page.id}
             activeBoxId={activeBoxId}
+            selectedBoxIds={selectedBoxIds}
             tool={tool}
             zoom={zoom}
+            brushSize={brushSize}
+            brushMode={brushMode}
             imageVersion={imageVersion}
             warpEditBoxId={warpEditBoxId}
             registerBox={(boxId, node) => {
@@ -505,6 +724,9 @@ function WebtoonReader({
               else delete boxRefs.current[boxId];
             }}
             onCreateBox={onCreateBox}
+            onManualInpaint={onManualInpaint}
+            onRestoreBrush={onRestoreBrush}
+            onBrushError={onBrushError}
             onSelectPage={onSelectPage}
             onSelectBox={onSelectBox}
             onPatchBox={onPatchBox}
@@ -522,23 +744,35 @@ function PageCanvas({
   page,
   pageIndex,
   boxes,
+  manualMasks,
   active,
   activeBoxId,
+  selectedBoxIds,
   tool,
   zoom,
+  brushSize,
+  brushMode,
   imageVersion,
   warpEditBoxId,
   registerBox,
   onCreateBox,
+  onManualInpaint,
+  onRestoreBrush,
+  onBrushError,
   onSelectPage,
   onSelectBox,
   onPatchBox,
   fonts,
 }) {
   const stageRef = useRef(null);
+  const brushCanvasRef = useRef(null);
+  const brushPointRef = useRef(null);
   const [draft, setDraft] = useState(null);
   const [drag, setDrag] = useState(null);
+  const [resize, setResize] = useState(null);
   const [warpDrag, setWarpDrag] = useState(null);
+  const [hasBrushMask, setHasBrushMask] = useState(false);
+  const [brushBusy, setBrushBusy] = useState(false);
   const imageSrc = `${api.imageUrl(session.projectId, session.episodeId, page.id)}&v=${imageVersion}`;
 
   function point(event) {
@@ -547,6 +781,90 @@ function PageCanvas({
       x: (event.clientX - rect.left) / zoom,
       y: (event.clientY - rect.top) / zoom,
     };
+  }
+
+  function brushPoint(event) {
+    const rect = brushCanvasRef.current.getBoundingClientRect();
+    return {
+      x: clamp((event.clientX - rect.left) / zoom, 0, page.width),
+      y: clamp((event.clientY - rect.top) / zoom, 0, page.height),
+    };
+  }
+
+  function drawBrushLine(from, to) {
+    const canvas = brushCanvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d");
+    const size = Math.max(2, Number(brushSize || 36));
+    context.save();
+    context.lineWidth = size;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.globalCompositeOperation = tool === "brush" && brushMode === "erase" ? "destination-out" : "source-over";
+    context.strokeStyle = tool === "restore" ? "rgba(69, 212, 131, 0.72)" : "rgba(231, 189, 84, 0.7)";
+    context.fillStyle = tool === "restore" ? "rgba(69, 212, 131, 0.72)" : "rgba(231, 189, 84, 0.7)";
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
+    context.beginPath();
+    context.arc(to.x, to.y, size / 2, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+    if (tool === "restore" || brushMode !== "erase") setHasBrushMask(true);
+  }
+
+  function clearBrushMask() {
+    const canvas = brushCanvasRef.current;
+    if (!canvas) return;
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    setHasBrushMask(false);
+  }
+
+  function onBrushPointerDown(event) {
+    if (!["brush", "restore"].includes(tool) || brushBusy) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onSelectPage(page.id);
+    const current = brushPoint(event);
+    brushPointRef.current = current;
+    drawBrushLine(current, current);
+  }
+
+  function onBrushPointerMove(event) {
+    if (!["brush", "restore"].includes(tool) || !brushPointRef.current || brushBusy) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const current = brushPoint(event);
+    drawBrushLine(brushPointRef.current, current);
+    brushPointRef.current = current;
+  }
+
+  function onBrushPointerUp(event) {
+    if (brushPointRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    brushPointRef.current = null;
+  }
+
+  async function submitBrushMask() {
+    if (!hasBrushMask || brushBusy) return;
+    setBrushBusy(true);
+    try {
+      const payload = extractBrushMask(brushCanvasRef.current);
+      if (tool === "restore") {
+        await onRestoreBrush(page.id, payload);
+      } else {
+        await onManualInpaint(page.id, payload);
+      }
+      clearBrushMask();
+    } catch (error) {
+      onBrushError(error.message);
+    } finally {
+      setBrushBusy(false);
+    }
   }
 
   function onPointerDown(event) {
@@ -571,8 +889,18 @@ function PageCanvas({
       const current = point(event);
       const dx = current.x - drag.start.x;
       const dy = current.y - drag.start.y;
-      onPatchBox(drag.box.id, {
-        bbox: { ...drag.box.bbox, x: Math.max(0, drag.origin.x + dx), y: Math.max(0, drag.origin.y + dy) },
+      drag.items.forEach((item) => {
+        onPatchBox(item.box.id, {
+          bbox: { ...item.box.bbox, x: Math.max(0, item.origin.x + dx), y: Math.max(0, item.origin.y + dy) },
+        });
+      });
+    }
+    if (resize) {
+      const current = point(event);
+      const dx = current.x - resize.start.x;
+      const dy = current.y - resize.start.y;
+      onPatchBox(resize.box.id, {
+        bbox: resizedBox(resize.origin, resize.handle, dx, dy, page.width, page.height),
       });
     }
     if (warpDrag) {
@@ -594,6 +922,7 @@ function PageCanvas({
     if (draft && draft.w > 18 && draft.h > 18) onCreateBox(page.id, { x: draft.x, y: draft.y, w: draft.w, h: draft.h });
     setDraft(null);
     setDrag(null);
+    setResize(null);
     setWarpDrag(null);
   }
 
@@ -602,31 +931,50 @@ function PageCanvas({
       <div className="reader-page-title">
         <span>{pageIndex + 1}</span>
         <strong>{page.name}</strong>
-        <em>{boxes.length} yazı</em>
+        <div className="page-tools">
+          <em>{boxes.length} yazı</em>
+        </div>
       </div>
       <div
         ref={stageRef}
-        className={`canvas-page tool-${tool}`}
+        className={`canvas-page tool-${tool} brush-${brushMode}`}
         style={{ width: page.width * zoom, height: page.height * zoom }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
       >
         <img src={imageSrc} alt={page.name} style={{ width: page.width * zoom, height: page.height * zoom }} draggable="false" />
         <div className="overlay" style={{ transform: `scale(${zoom})`, width: page.width, height: page.height }}>
+          {tool === "restore" ? manualMasks.map((mask) => (
+            <img
+              key={mask.id}
+              className="restore-mask-overlay"
+              src={`${api.manualMaskOverlayUrl(session.projectId, session.episodeId, mask.id)}&v=${imageVersion}`}
+              alt=""
+              draggable="false"
+            />
+          )) : null}
           {boxes.map((box) => (
             <div
               key={box.id}
               ref={(node) => registerBox(box.id, node)}
-              className={box.id === activeBoxId ? "box active" : "box"}
+              className={boxClassName(box, activeBoxId, selectedBoxIds)}
               style={{ left: box.bbox.x, top: box.bbox.y, width: box.bbox.w, height: box.bbox.h }}
               onPointerDown={(event) => {
                 if (tool !== "select") return;
                 event.stopPropagation();
                 onSelectPage(page.id);
-                onSelectBox(box.id, page.id);
+                const additive = event.ctrlKey || event.metaKey;
+                const preserveSelection = !additive && selectedBoxIds.length > 1 && selectedBoxIds.includes(box.id);
+                onSelectBox(box.id, page.id, additive, preserveSelection);
+                if (additive) return;
                 if (warpEditBoxId === box.id) return;
-                setDrag({ box, start: point(event), origin: { x: box.bbox.x, y: box.bbox.y } });
+                const draggedBoxes = preserveSelection ? boxes.filter((item) => selectedBoxIds.includes(item.id)) : [box];
+                setDrag({
+                  items: draggedBoxes.map((item) => ({ box: item, origin: { x: item.bbox.x, y: item.bbox.y } })),
+                  start: point(event),
+                });
               }}
             >
               {hasCustomWarp(resolvedBoxCorners(box)) && warpEditBoxId !== box.id ? <SelectionShape box={box} /> : null}
@@ -642,13 +990,52 @@ function PageCanvas({
                   }}
                 />
               ) : null}
+              {tool === "select" && box.id === activeBoxId && warpEditBoxId !== box.id ? (
+                <ResizeHandles
+                  onResizeStart={(event, handle) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSelectPage(page.id);
+                    const preserveSelection = selectedBoxIds.length > 1 && selectedBoxIds.includes(box.id);
+                    onSelectBox(box.id, page.id, false, preserveSelection);
+                    setDrag(null);
+                    setResize({
+                      box,
+                      handle,
+                      origin: { ...box.bbox },
+                      start: point(event),
+                    });
+                  }}
+                />
+              ) : null}
               <span>{box.order}</span>
               <i>{box.status}</i>
             </div>
           ))}
           {draft ? <div className="box draft" style={{ left: draft.x, top: draft.y, width: draft.w, height: draft.h }} /> : null}
+          <canvas
+            ref={brushCanvasRef}
+            className="brush-mask-canvas"
+            width={page.width}
+            height={page.height}
+            style={{ width: page.width, height: page.height }}
+            onPointerDown={onBrushPointerDown}
+            onPointerMove={onBrushPointerMove}
+            onPointerUp={onBrushPointerUp}
+            onPointerCancel={onBrushPointerUp}
+          />
         </div>
       </div>
+      {active && ["brush", "restore"].includes(tool) ? (
+        <div className="brush-floating-actions">
+          <button type="button" className="page-tool" onClick={clearBrushMask} disabled={!hasBrushMask || brushBusy} title="Maskeyi temizle">
+            <X size={14} />
+          </button>
+          <button type="button" className="page-tool text" onClick={submitBrushMask} disabled={!hasBrushMask || brushBusy} title={tool === "restore" ? "Orijinal pikselleri geri getir" : "Fırça alanını temizle"}>
+            <Eraser size={14} /> {brushBusy ? "İşleniyor" : tool === "restore" ? "Geri getir" : "Temizle"}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -704,6 +1091,32 @@ function WarpControls({ box, onCornerDown }) {
   );
 }
 
+function ResizeHandles({ onResizeStart }) {
+  const handles = [
+    ["nw", "Sol üstten boyutlandır"],
+    ["n", "Üstten boyutlandır"],
+    ["ne", "Sağ üstten boyutlandır"],
+    ["e", "Sağdan boyutlandır"],
+    ["se", "Sağ alttan boyutlandır"],
+    ["s", "Alttan boyutlandır"],
+    ["sw", "Sol alttan boyutlandır"],
+    ["w", "Soldan boyutlandır"],
+  ];
+  return (
+    <div className="resize-handles">
+      {handles.map(([handle, title]) => (
+        <button
+          key={handle}
+          type="button"
+          className={`resize-handle ${handle}`}
+          onPointerDown={(event) => onResizeStart(event, handle)}
+          title={title}
+        />
+      ))}
+    </div>
+  );
+}
+
 function SelectionShape({ box }) {
   const corners = resolvedBoxCorners(box);
   const points = warpPoints(corners, box.bbox);
@@ -717,8 +1130,8 @@ function SelectionShape({ box }) {
 function Inspector({
   box,
   boxes,
+  selectedBoxIds,
   pages,
-  jobs,
   fonts,
   scrollTarget,
   onSelect,
@@ -734,6 +1147,10 @@ function Inspector({
 }) {
   const rowRefs = useRef({});
   const style = box?.style || {};
+  const fontSize = positiveNumber(style.fontSize, 28);
+  const selectedCount = selectedBoxIds.length;
+  const activeSelectionIds = box && selectedBoxIds.includes(box.id) ? selectedBoxIds : box ? [box.id] : [];
+  const perspectiveResetStyle = { scaleX: 1, rotation: 0, perspectiveX: 0, perspectiveY: 0, skewX: 0 };
 
   useEffect(() => {
     if (scrollTarget?.type === "inspector") {
@@ -752,8 +1169,12 @@ function Inspector({
               if (node) rowRefs.current[item.id] = node;
               else delete rowRefs.current[item.id];
             }}
-            className={item.id === box?.id ? "box-row active" : "box-row"}
-            onClick={() => onSelect(item.id)}
+            className={boxRowClassName(item, box, selectedBoxIds)}
+            onClick={(event) => {
+              const additive = event.ctrlKey || event.metaKey;
+              const preserveSelection = !additive && selectedBoxIds.length > 1 && selectedBoxIds.includes(item.id);
+              onSelect(item.id, additive, preserveSelection);
+            }}
           >
             <span>{boxLabel(item, pages)}</span>
             <strong>{item.translatedText || item.sourceText || "Metin bekliyor"}</strong>
@@ -765,52 +1186,62 @@ function Inspector({
       {box ? (
         <div className="detail">
           <div className="detail-head">
-            <h2>{boxLabel(box, pages)} Düzenle</h2>
-            <button className="icon-danger" onClick={() => onDelete(box.id)}><Trash2 size={16} /></button>
+            <div>
+              <h2>{selectedCount > 1 && selectedBoxIds.includes(box.id) ? `${selectedCount} Kutu Seçili` : `${boxLabel(box, pages)} Düzenle`}</h2>
+              {selectedCount > 1 && selectedBoxIds.includes(box.id) ? <span>Aktif kutu: {boxLabel(box, pages)}</span> : null}
+            </div>
+            <button className="icon-danger" onClick={() => onDelete(box)} title={activeSelectionIds.length > 1 ? "Seçili kutuları sil" : "Kutuyu sil"}><Trash2 size={16} /></button>
           </div>
           <label>Orijinal metin</label>
           <textarea value={box.sourceText} onChange={(event) => onPatch(box.id, { sourceText: event.target.value })} />
           <label>Çeviri</label>
           <textarea value={box.translatedText} onChange={(event) => onPatch(box.id, { translatedText: event.target.value })} />
           <div className="inline-tools">
-            <button onClick={() => onSingleOcr(box)}><Search size={15} /> OCR</button>
-            <button onClick={() => onSingleInpaint(box)}><Eraser size={15} /> Sil</button>
-            <button onClick={() => onSinglePlace(box)}><AlignCenter size={15} /> Yerleştir</button>
-            <button onClick={() => onSingleUnplace(box)}><X size={15} /> Kaldır</button>
-            <button onClick={() => onRestoreOriginal(box)}><RefreshCcw size={15} /> Orijinale dön</button>
+            <button onClick={() => onSingleOcr(box)}><Search size={15} /> OCR{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+            <button onClick={() => onSingleInpaint(box)}><Eraser size={15} /> Sil{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+            <button onClick={() => onSinglePlace(box)}><AlignCenter size={15} /> Yerleştir{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+            <button onClick={() => onSingleUnplace(box)}><X size={15} /> Kaldır{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+            <button onClick={() => onRestoreOriginal(box)}><RefreshCcw size={15} /> Orijinale dön{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
           </div>
           <div className="style-grid">
-            <label className="wide">Font<select value={style.fontFamily || "noto-sans-black"} onChange={(event) => onPatch(box.id, { style: { ...style, fontFamily: event.target.value } })}>
+            <label className="wide">Font<select value={style.fontFamily || "noto-sans-black"} onChange={(event) => onPatch(box.id, { style: { ...style, fontFamily: event.target.value } }, { stylePatch: { fontFamily: event.target.value } })}>
               {fonts.map((font) => (
                 <option key={font.id} value={font.id}>{font.name}</option>
               ))}
             </select></label>
-            <label>Boyut<input type="number" value={style.fontSize || 28} onChange={(event) => onPatch(box.id, { style: { ...style, fontSize: Number(event.target.value) } })} /></label>
-            <label>Renk<input type="color" value={style.color || "#111111"} onChange={(event) => onPatch(box.id, { style: { ...style, color: event.target.value } })} /></label>
-            <label>Kontur<input type="color" value={style.strokeColor || "#ffffff"} onChange={(event) => onPatch(box.id, { style: { ...style, strokeColor: event.target.value } })} /></label>
-            <button className="toggle" onClick={() => onPatch(box.id, { style: { ...style, bold: !style.bold } })}><Bold size={15} /> Kalın</button>
-            <label>Genişlik <span>{Number(style.scaleX || 1).toFixed(2)}x</span><input type="range" min="0.5" max="2.5" step="0.05" value={style.scaleX || 1} onChange={(event) => onPatch(box.id, { style: { ...style, scaleX: Number(event.target.value) } })} /></label>
-            <label>Döndür <span>{style.rotation || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.rotation || 0} onChange={(event) => onPatch(box.id, { style: { ...style, rotation: Number(event.target.value) } })} /></label>
-            <label>Perspektif X <span>{style.perspectiveX || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveX || 0} onChange={(event) => onPatch(box.id, { style: { ...style, perspectiveX: Number(event.target.value) } })} /></label>
-            <label>Perspektif Y <span>{style.perspectiveY || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveY || 0} onChange={(event) => onPatch(box.id, { style: { ...style, perspectiveY: Number(event.target.value) } })} /></label>
-            <label>Eğiklik <span>{style.skewX || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.skewX || 0} onChange={(event) => onPatch(box.id, { style: { ...style, skewX: Number(event.target.value) } })} /></label>
+            <label>Boyut<input type="number" min="6" max="240" value={fontSize} onChange={(event) => {
+              const next = positiveNumber(event.target.value, fontSize);
+              onPatch(box.id, { style: { ...style, fontSize: next } }, { stylePatch: { fontSize: next } });
+            }} /></label>
+            <label>Renk<input type="color" value={style.color || "#111111"} onChange={(event) => onPatch(box.id, { style: { ...style, color: event.target.value } }, { stylePatch: { color: event.target.value } })} /></label>
+            <label>Kontur<input type="color" value={style.strokeColor || "#ffffff"} onChange={(event) => onPatch(box.id, { style: { ...style, strokeColor: event.target.value } }, { stylePatch: { strokeColor: event.target.value } })} /></label>
+            <button className="toggle" onClick={() => onPatch(box.id, { style: { ...style, bold: !style.bold } }, { stylePatch: { bold: !style.bold } })}><Bold size={15} /> Kalın</button>
+            <label>Genişlik <span>{Number(style.scaleX || 1).toFixed(2)}x</span><input type="range" min="0.5" max="2.5" step="0.05" value={style.scaleX || 1} onChange={(event) => {
+              const next = Number(event.target.value);
+              onPatch(box.id, { style: { ...style, scaleX: next } }, { stylePatch: { scaleX: next } });
+            }} /></label>
+            <label>Döndür <span>{style.rotation || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.rotation || 0} onChange={(event) => {
+              const next = Number(event.target.value);
+              onPatch(box.id, { style: { ...style, rotation: next } }, { stylePatch: { rotation: next } });
+            }} /></label>
+            <label>Perspektif X <span>{style.perspectiveX || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveX || 0} onChange={(event) => {
+              const next = Number(event.target.value);
+              onPatch(box.id, { style: { ...style, perspectiveX: next } }, { stylePatch: { perspectiveX: next } });
+            }} /></label>
+            <label>Perspektif Y <span>{style.perspectiveY || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveY || 0} onChange={(event) => {
+              const next = Number(event.target.value);
+              onPatch(box.id, { style: { ...style, perspectiveY: next } }, { stylePatch: { perspectiveY: next } });
+            }} /></label>
+            <label>Eğiklik <span>{style.skewX || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.skewX || 0} onChange={(event) => {
+              const next = Number(event.target.value);
+              onPatch(box.id, { style: { ...style, skewX: next } }, { stylePatch: { skewX: next } });
+            }} /></label>
             <button className={warpEditBoxId === box.id ? "toggle wide-button active" : "toggle wide-button"} onClick={() => onToggleWarpEdit(box)}><SlidersHorizontal size={15} /> Köşe modu</button>
-            <button className="toggle wide-button" onClick={() => onPatch(box.id, { corners: defaultWarpCorners(), style: { ...style, scaleX: 1, rotation: 0, perspectiveX: 0, perspectiveY: 0, skewX: 0 } })}><SlidersHorizontal size={15} /> Perspektifi sıfırla</button>
+            <button className="toggle wide-button" onClick={() => onPatch(box.id, { corners: defaultWarpCorners(), style: { ...style, ...perspectiveResetStyle } }, { stylePatch: perspectiveResetStyle })}><SlidersHorizontal size={15} /> Perspektifi sıfırla</button>
           </div>
         </div>
       ) : null}
 
-      <div className="panel-title with-gap">İş Kuyruğu</div>
-      <div className="job-list">
-        {jobs.length === 0 ? <p>Henüz işlem yok.</p> : null}
-        {jobs.map((job) => (
-          <div key={job.id} className={`job ${job.status}`}>
-            <span>{job.type}</span>
-            <strong>{job.message}</strong>
-            <div><b style={{ width: `${job.progress}%` }} /></div>
-          </div>
-        ))}
-      </div>
     </aside>
   );
 }
@@ -824,6 +1255,7 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
   const [uploadingFont, setUploadingFont] = useState(false);
   const ai = draft.ai;
   const editor = draft.editor;
+  const reader = draft.reader;
 
   useEffect(() => {
     setDraft(draftSettings(settings));
@@ -859,6 +1291,10 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
     });
   }
 
+  function patchReader(patch) {
+    setDraft((value) => ({ ...value, reader: { ...value.reader, ...patch } }));
+  }
+
   async function submit(event) {
     event.preventDefault();
     setSaving(true);
@@ -866,6 +1302,7 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
     try {
       await onSave({
         editor,
+        reader,
         ai: {
           ...ai,
           defaultTargetLanguage: ai.defaultTargetLanguage.toUpperCase(),
@@ -929,6 +1366,16 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
           </section>
 
           <section className="settings-section">
+            <h3>Reader Senkronizasyon</h3>
+            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", margin: "0 0 10px" }}>Kaydet sonrası düzenlenmiş görselleri ev sunucusuna rsync ile gönderir.</p>
+            <div className="settings-grid">
+              <label className="check-row"><input type="checkbox" checked={reader.syncEnabled} onChange={(event) => patchReader({ syncEnabled: event.target.checked })} /> Otomatik senkronizasyon</label>
+              <label>Sunucu adresi<input value={reader.syncHost} onChange={(event) => patchReader({ syncHost: event.target.value })} placeholder="user@example.com" /></label>
+              <label>Hedef yol<input value={reader.syncPath} onChange={(event) => patchReader({ syncPath: event.target.value })} placeholder="~/webtoon-reader/data/library" /></label>
+            </div>
+          </section>
+
+          <section className="settings-section">
             <div className="settings-section-head">
               <h3>Gemini</h3>
               <button type="button" onClick={addGeminiKey}><Plus size={15} /> Key ekle</button>
@@ -936,8 +1383,8 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
             <div className="key-list">
               <p>
                 {ai.envGeminiKeyAvailable
-                  ? ".env içindeki GEMINI_API_KEY aktif. Buradaki keyler sadece yerel yedek kullanım içindir."
-                  : "Önerilen yöntem: proje kökünde .env dosyasına GEMINI_API_KEY eklemek. Buradan eklenen keyler sadece yerel data/settings.json içinde saklanır."}
+                  ? "GEMINI_API_KEY ortam değişkeni aktif. Buradaki keyler sadece yerel yedek kullanım içindir."
+                  : "Çeviri için Gemini API key ekleyin. Keyler yalnızca yerel data/settings.json içinde saklanır."}
               </p>
               {ai.geminiKeys.map((item) => (
                 <div key={item.id} className="key-row">
@@ -984,6 +1431,9 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
               <label>Algılama modu<SelectWithOptions value={ai.rtdetrTextLabels} options={DETECT_LABEL_OPTIONS} onChange={(value) => patchAi({ rtdetrTextLabels: value })} /></label>
               <label>Eşik<input type="number" min="0.05" max="0.95" step="0.01" value={ai.rtdetrThreshold} onChange={(event) => patchAi({ rtdetrThreshold: Number(event.target.value) })} /></label>
               <label>OCR dili<SelectWithOptions value={ai.ocrLanguage} options={OCR_LANGUAGE_OPTIONS} onChange={(value) => patchAi({ ocrLanguage: value })} /></label>
+              <label className="check-row"><input type="checkbox" checked={ai.ocrPerspectiveEnabled} onChange={(event) => patchAi({ ocrPerspectiveEnabled: event.target.checked })} /> OCR perspektif kutusu</label>
+              <label>Minimum açı<input type="number" min="0" max="45" step="1" value={ai.ocrPerspectiveMinAngle} onChange={(event) => patchAi({ ocrPerspectiveMinAngle: Number(event.target.value) })} /></label>
+              <label>Perspektif payı<input type="number" min="0" max="3" step="0.1" value={ai.ocrPerspectivePadding} onChange={(event) => patchAi({ ocrPerspectivePadding: Number(event.target.value) })} /></label>
               <label className="check-row"><input type="checkbox" checked={ai.strictMode} onChange={(event) => patchAi({ strictMode: event.target.checked })} /> Hataları durdur</label>
             </div>
           </section>
@@ -994,6 +1444,7 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
               <label>IOPaint model<SelectWithOptions value={ai.inpaintModel} options={INPAINT_MODEL_OPTIONS} onChange={(value) => patchAi({ inpaintModel: value })} /></label>
               <label>Cihaz<SelectWithOptions value={ai.aiDevice} options={DEVICE_OPTIONS} onChange={(value) => patchAi({ aiDevice: value })} /></label>
               <label>Maske payı<input type="number" min="0" max="80" value={ai.inpaintPadding} onChange={(event) => patchAi({ inpaintPadding: Number(event.target.value) })} /></label>
+              <label className="check-row wide"><input type="checkbox" checked={ai.inpaintPerspectiveMask} onChange={(event) => patchAi({ inpaintPerspectiveMask: event.target.checked })} /> Perspektif maskesiyle sil</label>
             </div>
           </section>
         </div>
@@ -1020,6 +1471,106 @@ function SelectWithOptions({ value, options, onChange }) {
       ))}
     </select>
   );
+}
+
+function extractBrushMask(canvas) {
+  if (!canvas) throw new Error("Fırça maskesi bulunamadı.");
+  const context = canvas.getContext("2d");
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = imageData.data;
+  let left = canvas.width;
+  let top = canvas.height;
+  let right = 0;
+  let bottom = 0;
+  let found = false;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] === 0) continue;
+    const pixel = (index - 3) / 4;
+    const x = pixel % canvas.width;
+    const y = Math.floor(pixel / canvas.width);
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x + 1);
+    bottom = Math.max(bottom, y + 1);
+    found = true;
+  }
+  if (!found) throw new Error("Fırça maskesi boş.");
+  left = Math.max(0, left - 2);
+  top = Math.max(0, top - 2);
+  right = Math.min(canvas.width, right + 2);
+  bottom = Math.min(canvas.height, bottom + 2);
+  const width = right - left;
+  const height = bottom - top;
+  const cropped = document.createElement("canvas");
+  cropped.width = width;
+  cropped.height = height;
+  cropped.getContext("2d").drawImage(canvas, left, top, width, height, 0, 0, width, height);
+  return {
+    mask: cropped.toDataURL("image/png"),
+    bbox: { x: left, y: top, w: width, h: height },
+  };
+}
+
+function visibleJob(jobs) {
+  return jobs.find((job) => ["queued", "running", "failed"].includes(job.status)) || null;
+}
+
+function jobLabel(type) {
+  return {
+    detect: "Algılama",
+    ocr: "OCR",
+    inpaint: "Temizleme",
+    "manual-inpaint": "Fırça",
+    "restore-brush": "Orijinal",
+    translate: "Çeviri",
+    place: "Yerleştirme",
+    unplace: "Kaldırma",
+    save: "Kaydetme",
+  }[type] || type;
+}
+
+function isEditableTarget(target) {
+  if (!target) return false;
+  const tagName = target.tagName?.toLowerCase();
+  return target.isContentEditable || ["input", "textarea", "select"].includes(tagName);
+}
+
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function resizedBox(origin, handle, dx, dy, pageWidth, pageHeight) {
+  const minSize = 18;
+  let left = Number(origin.x || 0);
+  let top = Number(origin.y || 0);
+  let right = left + Number(origin.w || minSize);
+  let bottom = top + Number(origin.h || minSize);
+
+  if (handle.includes("w")) {
+    left = clamp(left + dx, 0, right - minSize);
+  }
+  if (handle.includes("e")) {
+    right = clamp(right + dx, left + minSize, pageWidth);
+  }
+  if (handle.includes("n")) {
+    top = clamp(top + dy, 0, bottom - minSize);
+  }
+  if (handle.includes("s")) {
+    bottom = clamp(bottom + dy, top + minSize, pageHeight);
+  }
+
+  return {
+    ...origin,
+    x: roundLayout(left),
+    y: roundLayout(top),
+    w: roundLayout(right - left),
+    h: roundLayout(bottom - top),
+  };
+}
+
+function roundLayout(value) {
+  return Math.round(value * 10) / 10;
 }
 
 function textTransformStyle(style) {
@@ -1143,9 +1694,31 @@ function withCurrentOption(options, current) {
   return [...options, current].sort((a, b) => a - b);
 }
 
+function diffTextStyle(nextStyle, currentStyle) {
+  return Object.fromEntries(
+    Object.entries(nextStyle || {}).filter(([key, value]) => !Object.is(value, currentStyle?.[key])),
+  );
+}
+
 function boxLabel(box, pages) {
   const pageIndex = Math.max(0, pages.findIndex((page) => page.id === box.pageId));
   return `${pageIndex + 1}.${box.order}`;
+}
+
+function boxClassName(box, activeBoxId, selectedBoxIds) {
+  return [
+    "box",
+    selectedBoxIds.includes(box.id) ? "selected" : "",
+    box.id === activeBoxId ? "active" : "",
+  ].filter(Boolean).join(" ");
+}
+
+function boxRowClassName(item, activeBox, selectedBoxIds) {
+  return [
+    "box-row",
+    selectedBoxIds.includes(item.id) ? "selected" : "",
+    item.id === activeBox?.id ? "active" : "",
+  ].filter(Boolean).join(" ");
 }
 
 function orderBoxesByReadingPosition(items, pages) {
@@ -1167,6 +1740,15 @@ function orderBoxesByReadingPosition(items, pages) {
   });
 }
 
+function orderManualMasks(items, pages) {
+  return items.slice().sort((a, b) => {
+    const pageA = pageIndex(pages, a.pageId);
+    const pageB = pageIndex(pages, b.pageId);
+    if (pageA !== pageB) return pageA - pageB;
+    return String(a.createdAt || a.id).localeCompare(String(b.createdAt || b.id));
+  });
+}
+
 function pageIndex(pages, pageId) {
   const index = pages.findIndex((page) => page.id === pageId);
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
@@ -1175,10 +1757,16 @@ function pageIndex(pages, pageId) {
 function draftSettings(settings) {
   const ai = settings?.ai || {};
   const editor = settings?.editor || {};
+  const reader = settings?.reader || {};
   return {
     editor: {
       defaultFontFamily: editor.defaultFontFamily || "noto-sans-black",
       defaultFontSize: editor.defaultFontSize || 28,
+    },
+    reader: {
+      syncEnabled: reader.syncEnabled || false,
+      syncHost: reader.syncHost || "",
+      syncPath: reader.syncPath || "~/webtoon-reader/data/library",
     },
     ai: {
       defaultTargetLanguage: ai.defaultTargetLanguage || "TR",
@@ -1194,9 +1782,13 @@ function draftSettings(settings) {
       rtdetrThreshold: ai.rtdetrThreshold ?? 0.55,
       rtdetrTextLabels: ai.rtdetrTextLabels || "text_bubble,text_free",
       ocrLanguage: ai.ocrLanguage || "en",
+      ocrPerspectiveEnabled: ai.ocrPerspectiveEnabled ?? true,
+      ocrPerspectiveMinAngle: ai.ocrPerspectiveMinAngle ?? 7,
+      ocrPerspectivePadding: ai.ocrPerspectivePadding ?? 1,
       inpaintModel: ai.inpaintModel || "lama",
       aiDevice: ai.aiDevice || "cpu",
       inpaintPadding: ai.inpaintPadding ?? 8,
+      inpaintPerspectiveMask: ai.inpaintPerspectiveMask ?? true,
       strictMode: Boolean(ai.strictMode),
     },
   };

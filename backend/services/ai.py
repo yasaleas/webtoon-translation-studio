@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -25,8 +26,10 @@ MODEL_REGISTRY = {
     "translator": "Gemini",
     "inpaint": "IOPaint",
 }
+NEAREST_RESAMPLE = getattr(Image, "Resampling", Image).NEAREST
 
 _OCR_PIPELINE: Any = None
+_OCR_GEOMETRY_PIPELINE: Any = None
 _RTDETR_MODEL: Any = None
 _RTDETR_PROCESSOR: Any = None
 _RTDETR_ONNX: Any = None
@@ -285,10 +288,19 @@ def overlap_ratio(first: dict[str, float], second: dict[str, float]) -> float:
 
 
 def run_ocr(image_file: str | Path, box: dict[str, Any]) -> str:
+    return run_ocr_with_geometry(image_file, box)["text"]
+
+
+def run_ocr_with_geometry(image_file: str | Path, box: dict[str, Any]) -> dict[str, Any]:
     crop_file = crop_box(Path(image_file), box)
     try:
-        text = run_paddleocr_vl(crop_file)
-        return text or detect_punctuation_text(crop_file)
+        analysis = run_paddleocr_analysis(crop_file)
+        text = analysis["text"] or detect_punctuation_text(crop_file)
+        corners = ocr_corners_from_polygons(analysis.get("polygons") or [], box, crop_size(crop_file))
+        result: dict[str, Any] = {"text": text}
+        if corners:
+            result["corners"] = corners
+        return result
     finally:
         crop_file.unlink(missing_ok=True)
 
@@ -330,6 +342,10 @@ def perspective_crop_box(image: Image.Image, box: dict[str, Any]) -> Image.Image
 
 
 def run_paddleocr_vl(image_file: Path) -> str:
+    return run_paddleocr_analysis(image_file)["text"]
+
+
+def run_paddleocr_analysis(image_file: Path) -> dict[str, Any]:
     global _OCR_PIPELINE
     try:
         if _OCR_PIPELINE is None:
@@ -358,14 +374,41 @@ def run_paddleocr_vl(image_file: Path) -> str:
                 )
 
         kind, pipeline = _OCR_PIPELINE
-        if kind == "vl":
-            output = pipeline.predict(str(image_file))
-            return extract_paddle_text(output)
-
         output = pipeline.predict(str(image_file))
-        return extract_paddle_text(output)
+        analysis = extract_paddle_analysis(output)
+        if kind == "vl" and not analysis["polygons"]:
+            try:
+                geometry_output = run_paddleocr_geometry(image_file)
+                geometry = extract_paddle_analysis(geometry_output)
+                analysis["polygons"] = geometry["polygons"]
+                if not analysis["text"]:
+                    analysis["text"] = geometry["text"]
+            except Exception:
+                pass
+        return analysis
     except Exception as error:
         raise RuntimeError(f"PaddleOCR-VL 1.5 OCR çalıştırılamadı: {error}") from error
+
+
+def run_paddleocr_geometry(image_file: Path) -> Any:
+    global _OCR_GEOMETRY_PIPELINE
+    from paddleocr import PaddleOCR
+
+    if _OCR_GEOMETRY_PIPELINE is None:
+        _OCR_GEOMETRY_PIPELINE = PaddleOCR(
+            lang=str(ai_value("ocrLanguage", "OCR_LANG", "en")),
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+    return _OCR_GEOMETRY_PIPELINE.predict(str(image_file))
+
+
+def extract_paddle_analysis(output: Any) -> dict[str, Any]:
+    return {
+        "text": extract_paddle_text(output),
+        "polygons": extract_paddle_polygons(output),
+    }
 
 
 def extract_paddle_text(output: Any) -> str:
@@ -382,6 +425,8 @@ def extract_paddle_text(output: Any) -> str:
             for key in ("text", "rec_text", "rec_texts", "text_content", "markdown"):
                 if key in value:
                     walk(value[key])
+            for item in value.values():
+                walk(item)
             return
         if isinstance(value, (list, tuple)):
             for item in value:
@@ -396,6 +441,211 @@ def extract_paddle_text(output: Any) -> str:
 
     walk(output)
     return "\n".join(dict.fromkeys(fragments)).strip()
+
+
+def extract_paddle_polygons(output: Any) -> list[list[tuple[float, float]]]:
+    polygons: list[list[tuple[float, float]]] = []
+    seen: set[int] = set()
+
+    def add_polygon(value: Any) -> None:
+        polygon = to_polygon(value)
+        if not polygon:
+            return
+        key = tuple((round(x, 2), round(y, 2)) for x, y in polygon)
+        if key in {tuple((round(x, 2), round(y, 2)) for x, y in item) for item in polygons}:
+            return
+        polygons.append(polygon)
+
+    def walk(value: Any) -> None:
+        if value is None:
+            return
+        value_id = id(value)
+        if value_id in seen:
+            return
+        seen.add(value_id)
+        if isinstance(value, dict):
+            for poly_key in ("rec_polys", "dt_polys", "polys", "boxes", "rec_boxes", "det_polys"):
+                if poly_key in value:
+                    add_polygon_list(value[poly_key])
+            for poly_key in ("poly", "polygon", "points", "bbox"):
+                if poly_key in value:
+                    add_polygon(value[poly_key])
+            for item in value.values():
+                walk(item)
+            return
+        if isinstance(value, (list, tuple)):
+            parse_legacy_ocr_items(value)
+            for item in value:
+                walk(item)
+            return
+        for attr in ("json", "res"):
+            if hasattr(value, attr):
+                try:
+                    walk(getattr(value, attr))
+                except Exception:
+                    pass
+
+    def add_polygon_list(value: Any) -> None:
+        items = value.tolist() if hasattr(value, "tolist") else value
+        if not isinstance(items, (list, tuple)):
+            return
+        for item in items:
+            add_polygon(item)
+
+    def parse_legacy_ocr_items(value: list[Any] | tuple[Any, ...]) -> None:
+        for item in value:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            if to_polygon(item[0]):
+                add_polygon(item[0])
+
+    walk(output)
+    return polygons
+
+
+def to_polygon(value: Any) -> list[tuple[float, float]] | None:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if not isinstance(value, (list, tuple)):
+        return None
+    if len(value) == 4 and all(is_number(item) for item in value):
+        x1, y1, x2, y2 = [float(item) for item in value]
+        return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+    if len(value) >= 8 and all(is_number(item) for item in value[:8]):
+        numbers = [float(item) for item in value[:8]]
+        return [(numbers[index], numbers[index + 1]) for index in range(0, 8, 2)]
+    points = []
+    for item in value:
+        if hasattr(item, "tolist"):
+            item = item.tolist()
+        if isinstance(item, dict) and is_number(item.get("x")) and is_number(item.get("y")):
+            points.append((float(item["x"]), float(item["y"])))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2 and is_number(item[0]) and is_number(item[1]):
+            points.append((float(item[0]), float(item[1])))
+    if len(points) < 4:
+        return None
+    return ordered_polygon(points[:4])
+
+
+def ordered_polygon(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    center_x = sum(point[0] for point in points) / len(points)
+    center_y = sum(point[1] for point in points) / len(points)
+    ordered = sorted(points, key=lambda point: math.atan2(point[1] - center_y, point[0] - center_x))
+    start = min(range(len(ordered)), key=lambda index: ordered[index][0] + ordered[index][1])
+    return ordered[start:] + ordered[:start]
+
+
+def ocr_corners_from_polygons(
+    polygons: list[list[tuple[float, float]]],
+    box: dict[str, Any],
+    size: tuple[int, int],
+) -> dict[str, dict[str, float]] | None:
+    if not ai_bool("ocrPerspectiveEnabled", "OCR_PERSPECTIVE_ENABLED", True):
+        return None
+    if not polygons or has_custom_box_corners(box):
+        return None
+    width, height = size
+    if width <= 1 or height <= 1:
+        return None
+    angle = dominant_polygon_angle(polygons)
+    min_angle = clamp_float(ai_value("ocrPerspectiveMinAngle", "OCR_PERSPECTIVE_MIN_ANGLE", 7), 0, 45, 7)
+    if angle is None or abs(math.degrees(angle)) < min_angle:
+        return None
+    points = [
+        (clamp_float(x, -width * 0.25, width * 1.25, x), clamp_float(y, -height * 0.25, height * 1.25, y))
+        for polygon in polygons
+        for x, y in polygon
+    ]
+    if len(points) < 4:
+        return None
+    corners = oriented_bounds(points, angle, width, height)
+    if not corners:
+        return None
+    return {
+        key: {"x": clamp_float(point[0] / width, -1.0, 2.0, 0.0), "y": clamp_float(point[1] / height, -1.0, 2.0, 0.0)}
+        for key, point in zip(("tl", "tr", "br", "bl"), corners)
+    }
+
+
+def dominant_polygon_angle(polygons: list[list[tuple[float, float]]]) -> float | None:
+    sine = 0.0
+    cosine = 0.0
+    total = 0.0
+    for polygon in polygons:
+        if len(polygon) < 4:
+            continue
+        for start, end in ((polygon[0], polygon[1]), (polygon[3], polygon[2])):
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length < 4:
+                continue
+            angle = normalize_text_angle(math.atan2(dy, dx))
+            sine += math.sin(angle * 2) * length
+            cosine += math.cos(angle * 2) * length
+            total += length
+    if total <= 0:
+        return None
+    return normalize_text_angle(0.5 * math.atan2(sine, cosine))
+
+
+def oriented_bounds(
+    points: list[tuple[float, float]],
+    angle: float,
+    width: int,
+    height: int,
+) -> list[tuple[float, float]] | None:
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    projected = [(x * cos_a + y * sin_a, -x * sin_a + y * cos_a) for x, y in points]
+    min_u = min(point[0] for point in projected)
+    max_u = max(point[0] for point in projected)
+    min_v = min(point[1] for point in projected)
+    max_v = max(point[1] for point in projected)
+    bounds_width = max_u - min_u
+    bounds_height = max_v - min_v
+    if bounds_width < 6 or bounds_height < 6:
+        return None
+    padding = clamp_float(ai_value("ocrPerspectivePadding", "OCR_PERSPECTIVE_PADDING", 1.0), 0, 3, 1.0)
+    pad_u = max(4.0, min(18.0, bounds_width * 0.08, width * 0.05)) * padding
+    pad_v = max(4.0, min(16.0, bounds_height * 0.14, height * 0.07)) * padding
+    min_u -= pad_u
+    max_u += pad_u
+    min_v -= pad_v
+    max_v += pad_v
+
+    def inverse(u: float, v: float) -> tuple[float, float]:
+        return (u * cos_a - v * sin_a, u * sin_a + v * cos_a)
+
+    return [
+        inverse(min_u, min_v),
+        inverse(max_u, min_v),
+        inverse(max_u, max_v),
+        inverse(min_u, max_v),
+    ]
+
+
+def normalize_text_angle(angle: float) -> float:
+    while angle <= -math.pi / 2:
+        angle += math.pi
+    while angle > math.pi / 2:
+        angle -= math.pi
+    return angle
+
+
+def crop_size(image_file: Path) -> tuple[int, int]:
+    with Image.open(image_file) as image:
+        return image.size
+
+
+def is_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(parsed)
 
 
 def detect_punctuation_text(image_file: Path) -> str:
@@ -672,6 +922,19 @@ def strip_number_prefix(line: str) -> str:
 
 def inpaint_region(image_file: str | Path, box: dict[str, Any]) -> dict[str, str]:
     image_file = Path(image_file)
+    with TemporaryDirectory() as temp_dir:
+        mask_file = Path(temp_dir) / "mask.png"
+        create_mask(image_file, mask_file, box)
+        run_iopaint(image_file, mask_file)
+    return {"status": "cleaned", "engine": MODEL_REGISTRY["inpaint"]}
+
+
+def inpaint_mask(image_file: str | Path, mask_file: str | Path) -> dict[str, str]:
+    run_iopaint(Path(image_file), Path(mask_file))
+    return {"status": "cleaned", "engine": MODEL_REGISTRY["inpaint"]}
+
+
+def run_iopaint(image_file: Path, source_mask_file: Path) -> None:
     iopaint = shutil.which("iopaint")
     if not iopaint:
         local_iopaint = Path(".venv-ai/bin/iopaint")
@@ -691,8 +954,13 @@ def inpaint_region(image_file: str | Path, box: dict[str, Any]) -> dict[str, str
         input_file = input_dir / "page.png"
         mask_file = mask_dir / "page.png"
         with Image.open(image_file) as image:
-            image.convert("RGB").save(input_file, format="PNG")
-        create_mask(image_file, mask_file, box)
+            source = image.convert("RGB")
+            source.save(input_file, format="PNG")
+            with Image.open(source_mask_file) as source_mask:
+                mask = source_mask.convert("L")
+                if mask.size != source.size:
+                    mask = mask.resize(source.size, NEAREST_RESAMPLE)
+                mask.save(mask_file, format="PNG")
         command = [
             iopaint,
             "run",
@@ -714,7 +982,6 @@ def inpaint_region(image_file: str | Path, box: dict[str, Any]) -> dict[str, str
         if not produced:
             raise RuntimeError("IOPaint çıktı üretmedi.")
         save_inpaint_output(produced, image_file)
-    return {"status": "cleaned", "engine": MODEL_REGISTRY["inpaint"]}
 
 
 def save_inpaint_output(produced: Path, image_file: Path) -> None:
@@ -733,7 +1000,7 @@ def create_mask(image_file: Path, mask_file: Path, box: dict[str, Any]) -> None:
         mask = Image.new("L", image.size, 0)
         draw = ImageDraw.Draw(mask)
         pad = int(ai_value("inpaintPadding", "INPAINT_PADDING", 8))
-        if has_custom_box_corners(box):
+        if ai_bool("inpaintPerspectiveMask", "INPAINT_PERSPECTIVE_MASK", True) and has_custom_box_corners(box):
             draw.polygon(expanded_box_points(box, pad), fill=255)
         else:
             bbox = box["bbox"] if "bbox" in box else box
