@@ -46,7 +46,7 @@ Kutular sayfa sirasi, yukseklik ve yatay konuma gore otomatik siralanir. Her kut
 
 Ayar menusu su alanlari yonetir:
 
-- Gemini API key durumu, model, hedef dil, timeout ve bolum parcalama.
+- Gemini API key durumu, hazir listeden veya serbest model ID ile model secimi, hedef dil, timeout ve bolum parcalama.
 - Varsayilan font ve font boyutu.
 - Kullanici fontu yukleme.
 - RT-DETR model, tespit esigi ve hedef label secimi.

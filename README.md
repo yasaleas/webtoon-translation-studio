@@ -127,6 +127,7 @@ Sağ paneldeki tekil kutu butonları sadece aktif kutu üzerinde çalışır. Ü
 Ayarlar menüsünden şu değerler düzenlenebilir:
 
 - Gemini model adı.
+- İsterseniz hazır listeden, isterseniz doğrudan model ID yazarak Gemini/Gemma çeviri modeli seçimi.
 - Hedef dil.
 - Gemini API key kayıtları ve aktif key seçimi.
 - Çeviriyi kaç parçaya bölerek göndereceği.

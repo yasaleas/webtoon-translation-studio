@@ -705,7 +705,7 @@ def translate_texts(texts: list[str], target_language: str) -> list[str]:
     if not api_key:
         raise RuntimeError("Gemini çalışması için Ayarlar menüsünden aktif API key seçilmeli.")
     try:
-        model = str(ai_value("geminiModel", "GEMINI_MODEL", "gemini-2.5-flash"))
+        model = normalize_model_name(ai_value("geminiModel", "GEMINI_MODEL", "gemini-3-flash-preview"))
         return translate_batch_resilient(api_key, model, texts, target_language)
     except Exception as error:
         raise RuntimeError(f"Gemini çeviri çalıştırılamadı: {error}") from error
@@ -796,6 +796,7 @@ def should_split_translation_error(error: Exception) -> bool:
 def gemini_generate(api_key: str, model: str, prompt: str, json_mode: bool = False) -> str:
     import requests
 
+    model = normalize_model_name(model)
     timeout = int(clamp_float(ai_value("geminiTimeout", "GEMINI_TIMEOUT", 60), 15, 180, 60))
     body: dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
     if json_mode:
@@ -816,6 +817,13 @@ def gemini_generate(api_key: str, model: str, prompt: str, json_mode: bool = Fal
     response.raise_for_status()
     payload = response.json()
     return payload["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def normalize_model_name(value: Any) -> str:
+    model = str(value or "").strip()
+    if model.startswith("models/"):
+        return model.removeprefix("models/").strip()
+    return model
 
 
 def translate_texts_one_by_one(api_key: str, model: str, texts: list[str], target_language: str) -> list[str]:

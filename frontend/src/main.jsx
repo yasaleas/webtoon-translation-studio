@@ -29,10 +29,13 @@ import "./styles/app.css";
 const emptySession = { projectId: "", episodeId: "" };
 const FONT_SIZE_OPTIONS = [18, 22, 24, 28, 32, 36, 42, 48, 56, 64];
 const GEMINI_MODEL_OPTIONS = [
+  ["gemini-3-flash-preview", "Gemini 3 Flash"],
+  ["gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite"],
   ["gemini-2.5-flash", "Gemini 2.5 Flash"],
+  ["gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"],
   ["gemini-2.5-pro", "Gemini 2.5 Pro"],
-  ["gemini-2.0-flash", "Gemini 2.0 Flash"],
-  ["gemini-1.5-flash", "Gemini 1.5 Flash"],
+  ["gemma-4-31b-it", "Gemma 4 31B"],
+  ["gemma-4-26b-a4b-it", "Gemma 4 26B"],
 ];
 const TARGET_LANGUAGE_OPTIONS = [
   ["TR", "Türkçe"],
@@ -1409,7 +1412,7 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
               ))}
             </div>
             <div className="settings-grid">
-              <label>Gemini model<SelectWithOptions value={ai.geminiModel} options={GEMINI_MODEL_OPTIONS} onChange={(value) => patchAi({ geminiModel: value })} /></label>
+              <label className="wide">Gemini model<ModelNameInput value={ai.geminiModel} options={GEMINI_MODEL_OPTIONS} onChange={(value) => patchAi({ geminiModel: value })} /></label>
               <label>Varsayılan dil<SelectWithOptions value={ai.defaultTargetLanguage} options={TARGET_LANGUAGE_OPTIONS} onChange={(value) => patchAi({ defaultTargetLanguage: value.toUpperCase() })} /></label>
               <label>Bölüm parçalama<select value={ai.geminiPageSplits} onChange={(event) => patchAi({ geminiPageSplits: Number(event.target.value) })}>
                 {withCurrentOption(PAGE_SPLIT_OPTIONS.map(([value]) => value), Number(ai.geminiPageSplits)).map((count) => (
@@ -1470,6 +1473,25 @@ function SelectWithOptions({ value, options, onChange }) {
         <option key={optionValue} value={optionValue}>{label}</option>
       ))}
     </select>
+  );
+}
+
+function ModelNameInput({ value, options, onChange }) {
+  return (
+    <>
+      <input
+        list="gemini-model-options"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="gemini-3-flash-preview"
+        autoComplete="off"
+      />
+      <datalist id="gemini-model-options">
+        {options.map(([optionValue, label]) => (
+          <option key={optionValue} value={optionValue}>{label}</option>
+        ))}
+      </datalist>
+    </>
   );
 }
 
@@ -1770,7 +1792,7 @@ function draftSettings(settings) {
     },
     ai: {
       defaultTargetLanguage: ai.defaultTargetLanguage || "TR",
-      geminiModel: ai.geminiModel || "gemini-2.5-flash",
+      geminiModel: ai.geminiModel || "gemini-3-flash-preview",
       geminiPageSplits: ai.geminiPageSplits || 2,
       geminiBatchSize: ai.geminiBatchSize || 8,
       geminiBatchChars: ai.geminiBatchChars || 2200,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -325,43 +326,75 @@ def save_images(project_id: str, episode_id: str) -> dict[str, Any]:
         for index, page_id in enumerate(pages, start=1):
             advance(job, int(((index - 1) / total) * 90), f"Görseller kaydediliyor ({index}/{total})")
             render_texts(project_id, episode_id, page_id, [box for box in state["boxes"] if box["pageId"] == page_id])
-        sync_to_reader(project_id)
+        advance(job, 92, "Reader senkronizasyonu yapılıyor")
+        sync_to_reader(project_id, episode_id)
         return complete(job, "Düzenlenmiş görseller kaydedildi")
     except Exception as error:
         return fail(job, error)
 
 
-def sync_to_reader(project_id: str) -> None:
+def sync_to_reader(project_id: str, episode_id: str) -> None:
     settings = load_settings()
     reader = settings.get("reader", {})
     if not reader.get("syncEnabled"):
         return
     sync_host = reader.get("syncHost", "").strip()
-    sync_path = reader.get("syncPath", "").strip()
+    sync_path = normalize_remote_sync_path(sync_host, reader.get("syncPath", "").strip())
     if not sync_host or not sync_path:
         return
-    project_dir = PROJECTS_DIR / project_id
-    if not project_dir.exists():
+    episode_dir = PROJECTS_DIR / project_id / episode_id
+    if not episode_dir.exists():
         return
-    edited_dirs = list(project_dir.rglob("Duzenlenmis"))
-    if not edited_dirs:
-        edited_dirs = list(project_dir.rglob("Edited"))
-    if not edited_dirs:
+    edited_dir = episode_dir / "Duzenlenmis"
+    if not edited_dir.exists():
+        edited_dir = episode_dir / "Edited"
+    if not edited_dir.exists():
         return
-    for edited_dir in edited_dirs:
-        episode_dir = edited_dir.parent
-        episode_name = episode_dir.name
-        dest = f"{sync_host}:{sync_path}/{project_id}/{episode_name}/"
+
+    dest = f"{sync_host}:{sync_path}/{project_id}/{episode_id}/"
+    command = [
+        "rsync",
+        "-avz",
+        "--partial",
+        "--delay-updates",
+        "--mkpath",
+        "--protect-args",
+        "--timeout=30",
+        "-e",
+        "ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
+        f"{edited_dir}/",
+        dest,
+    ]
+    last_detail = ""
+    for attempt in range(1, 4):
         try:
             result = subprocess.run(
-                ["rsync", "-avz", "--timeout=30", f"{edited_dir}/", dest],
+                command,
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=180,
             )
-            if result.returncode != 0:
-                detail = (result.stderr or result.stdout or "").strip()
-                raise RuntimeError(f"Reader sync failed for {project_id}/{episode_name}: {detail}")
-        except Exception:
-            logging.getLogger(__name__).warning("Reader sync failed for %s/%s", project_id, episode_name)
-            raise
+            if result.returncode == 0:
+                return
+            last_detail = (result.stderr or result.stdout or "").strip()
+        except Exception as error:
+            last_detail = str(error)
+        logging.getLogger(__name__).warning(
+            "Reader sync failed for %s/%s on attempt %s: %s",
+            project_id,
+            episode_id,
+            attempt,
+            last_detail,
+        )
+        if attempt < 3:
+            time.sleep(2 * attempt)
+    raise RuntimeError(f"Reader sync failed for {project_id}/{episode_id}: {last_detail}")
+
+
+def normalize_remote_sync_path(sync_host: str, sync_path: str) -> str:
+    if sync_path == "~" or sync_path.startswith("~/"):
+        remote_user = sync_host.split("@", 1)[0].strip() if "@" in sync_host else ""
+        if remote_user:
+            suffix = sync_path[2:] if sync_path.startswith("~/") else ""
+            return f"/home/{remote_user}/{suffix}".rstrip("/")
+    return sync_path

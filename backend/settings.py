@@ -27,7 +27,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "ai": {
         "defaultTargetLanguage": "TR",
-        "geminiModel": "gemini-2.5-flash",
+        "geminiModel": "gemini-3-flash-preview",
         "geminiPageSplits": 2,
         "geminiBatchSize": 8,
         "geminiBatchChars": 2200,
