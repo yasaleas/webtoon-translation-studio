@@ -1224,7 +1224,7 @@ textarea:focus-visible {
 
 .topbar {
   display: grid;
-  grid-template-columns: 270px minmax(210px, 1fr) auto minmax(250px, 360px) auto;
+  grid-template-columns: minmax(360px, 430px) minmax(220px, 1fr) auto minmax(250px, 360px) auto;
   grid-template-areas: "brand summary toolbar job actions";
   gap: 10px 14px;
   align-items: center;
@@ -1237,6 +1237,7 @@ textarea:focus-visible {
   grid-area: brand;
   min-width: 0;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .brand-mark {
@@ -1259,6 +1260,50 @@ textarea:focus-visible {
 
 .brand small {
   color: var(--muted);
+}
+
+.top-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-left: 4px;
+}
+
+.top-nav button {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: var(--text-soft);
+  background: #111317;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.top-nav button:disabled {
+  opacity: 0.42;
+}
+
+.page-mode {
+  min-height: 100vh;
+  height: auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: auto;
+}
+
+.page-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.page-toolbar {
+  justify-content: flex-start;
 }
 
 .session-summary {
@@ -1411,7 +1456,7 @@ textarea:focus-visible {
 }
 
 .workspace {
-  grid-template-columns: 292px minmax(0, 1fr) 382px;
+  grid-template-columns: 248px minmax(0, 1fr) 382px;
   background: var(--app-bg);
 }
 
@@ -1549,6 +1594,168 @@ button:disabled {
   background: #12151a;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.project-page,
+.settings-page {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  background: var(--app-bg);
+}
+
+.project-page {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.project-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  max-width: 1180px;
+}
+
+.project-hero h1 {
+  margin: 4px 0 6px;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+}
+
+.project-hero p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.project-notice {
+  max-width: 1180px;
+  margin: 0;
+}
+
+.project-layout {
+  width: min(1180px, 100%);
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.project-list-panel,
+.episode-panel {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.project-list {
+  display: grid;
+  gap: 8px;
+}
+
+.project-row,
+.episode-card {
+  width: 100%;
+  min-height: 46px;
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-soft);
+  text-align: left;
+  background: #171b21;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+
+.project-row {
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  padding: 0 10px;
+}
+
+.project-row span,
+.episode-card strong,
+.episode-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row.active,
+.episode-card:hover {
+  border-color: rgba(215, 162, 59, 0.72);
+  background: var(--accent-weak);
+}
+
+.episode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.episode-card {
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
+  padding: 12px;
+}
+
+.episode-card strong {
+  display: block;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.episode-card small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.episode-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: var(--text-soft);
+  background: #111317;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+}
+
+.empty-panel {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+  background: #12151a;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.empty-panel h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.empty-panel p {
+  max-width: 360px;
+  margin: 0;
   font-size: 13px;
   line-height: 1.45;
 }
@@ -1831,6 +2038,29 @@ button:disabled {
   border-color: var(--border);
 }
 
+.settings-page .settings-dialog {
+  width: min(1120px, 100%);
+  max-height: none;
+  min-height: calc(100vh - 48px);
+  margin: 0 auto;
+  box-shadow: none;
+}
+
+.settings-page .settings-body {
+  align-content: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-page .settings-section {
+  align-content: start;
+}
+
+.settings-page .settings-section:nth-child(3),
+.settings-page .settings-section:nth-child(4),
+.settings-page .settings-section:nth-child(5) {
+  grid-column: 1 / -1;
+}
+
 .settings-head,
 .settings-footer {
   background: #14161a;
@@ -1872,7 +2102,7 @@ button:disabled {
 
 @media (max-width: 1380px) {
   .topbar {
-    grid-template-columns: 270px minmax(0, 1fr) minmax(250px, 360px) auto;
+    grid-template-columns: minmax(340px, 430px) minmax(0, 1fr) minmax(250px, 360px) auto;
     grid-template-areas:
       "brand summary job actions"
       "toolbar toolbar toolbar toolbar";
@@ -1920,6 +2150,15 @@ button:disabled {
   .summary-metrics {
     justify-content: flex-start;
   }
+
+  .project-layout,
+  .settings-page .settings-body {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-page .settings-section {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1957,6 +2196,10 @@ button:disabled {
     padding-bottom: 0;
     border-bottom: 0;
   }
+
+  .project-hero {
+    display: grid;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1979,6 +2222,15 @@ button:disabled {
 
   .canvas-scroll {
     padding: 14px 10px 32px;
+  }
+
+  .project-page,
+  .settings-page {
+    padding: 12px;
+  }
+
+  .episode-grid {
+    grid-template-columns: 1fr;
   }
 
   .detail-head {

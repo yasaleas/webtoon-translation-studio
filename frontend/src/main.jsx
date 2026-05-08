@@ -11,6 +11,7 @@ import {
   Eraser,
   FileImage,
   FolderOpen,
+  Home,
   Languages,
   Layers3,
   MousePointer2,
@@ -107,7 +108,7 @@ function App() {
   const [imageVersion, setImageVersion] = useState(0);
   const [scrollTarget, setScrollTarget] = useState(null);
   const [settings, setSettings] = useState(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [view, setView] = useState("projects");
   const [warpEditBoxId, setWarpEditBoxId] = useState("");
 
   useEffect(() => {
@@ -196,6 +197,7 @@ function App() {
     setActiveBoxId(ordered[0]?.id || "");
     setSelectedBoxIds(ordered[0]?.id ? [ordered[0].id] : []);
     setNotice("");
+    setView("editor");
   }
 
   async function refreshState() {
@@ -415,7 +417,7 @@ function App() {
     if (Object.keys(stylePatch).length > 0) {
       await applyStyleToCurrentBoxes(stylePatch);
     }
-    setSettingsOpen(false);
+    setView(session.projectId && session.episodeId ? "editor" : "projects");
     setNotice("Ayarlar kaydedildi.");
   }
 
@@ -431,18 +433,75 @@ function App() {
     return uploaded;
   }
 
+  if (view === "projects") {
+    return (
+      <div className="app-shell page-mode">
+        <PageTopbar
+          project={activeProject}
+          episode={activeEpisode}
+          stats={sessionStats}
+          jobs={jobs}
+          onOpenProjects={() => setView("projects")}
+          onOpenSettings={() => setView("settings")}
+          onOpenEditor={() => setView("editor")}
+          canOpenEditor={Boolean(activePage)}
+          onSave={() => runJob("save")}
+        />
+        <ProjectHome
+          projects={projects}
+          episodes={episodes}
+          session={session}
+          notice={notice}
+          onProject={(projectId) => setSession({ projectId, episodeId: "" })}
+          onOpenEpisode={(episodeId) => {
+            const next = { ...session, episodeId };
+            setSession(next);
+            openSession(next.projectId, next.episodeId).catch((error) => setNotice(error.message));
+          }}
+          onOpenSettings={() => setView("settings")}
+        />
+      </div>
+    );
+  }
+
+  if (view === "settings") {
+    return (
+      <div className="app-shell page-mode">
+        <PageTopbar
+          project={activeProject}
+          episode={activeEpisode}
+          stats={sessionStats}
+          jobs={jobs}
+          onOpenProjects={() => setView("projects")}
+          onOpenSettings={() => setView("settings")}
+          onOpenEditor={() => setView("editor")}
+          canOpenEditor={Boolean(activePage)}
+          onSave={() => runJob("save")}
+        />
+        <SettingsPage
+          settings={settings}
+          fonts={fonts}
+          onClose={() => setView(session.projectId && session.episodeId ? "editor" : "projects")}
+          onSave={saveSettings}
+          onUploadFont={(file, name) => uploadFont(file, name)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">WT</span>
-          <div>
-            <strong>Webtoon Translation Studio</strong>
-            <small>Yerel çeviri ve düzenleme stüdyosu</small>
-          </div>
-        </div>
-        <SessionSummary project={activeProject} episode={activeEpisode} stats={sessionStats} />
-        <JobStatusBar jobs={jobs} />
+      <PageTopbar
+        project={activeProject}
+        episode={activeEpisode}
+        stats={sessionStats}
+        jobs={jobs}
+        onOpenProjects={() => setView("projects")}
+        onOpenSettings={() => setView("settings")}
+        onOpenEditor={() => setView("editor")}
+        canOpenEditor={Boolean(activePage)}
+        onSave={() => runJob("save")}
+      >
         <div className="toolbar">
           <span className="toolbar-label">Araç</span>
           <ToolButton active={tool === "select"} icon={MousePointer2} label="Seç" onClick={() => setTool("select")} />
@@ -464,28 +523,14 @@ function App() {
           <span className="zoom-label">{Math.round(zoom * 100)}%</span>
           <ToolButton icon={ZoomIn} label="Yakınlaş" onClick={() => setZoom((value) => Math.min(1.4, value + 0.08))} />
         </div>
-        <div className="top-actions">
-          <ToolButton icon={Settings} label="Ayarlar" onClick={() => setSettingsOpen(true)} />
-          <button className="primary-action" onClick={() => runJob("save")}>
-            <Save size={17} /> Kaydet
-          </button>
-        </div>
-      </header>
+      </PageTopbar>
 
       <main className="workspace">
-        <ProjectSidebar
-          projects={projects}
-          episodes={episodes}
-          session={session}
+        <PageSidebar
           boxes={orderedBoxes}
           pages={pages}
           activePageId={activePage?.id}
-          onProject={(projectId) => setSession({ projectId, episodeId: "" })}
-          onEpisode={(episodeId) => {
-            const next = { ...session, episodeId };
-            setSession(next);
-            openSession(next.projectId, next.episodeId).catch((error) => setNotice(error.message));
-          }}
+          onBackToProjects={() => setView("projects")}
           onPage={(pageId) => {
             setActivePageId(pageId);
             setScrollTarget({ type: "page", pageId, nonce: Date.now() });
@@ -567,16 +612,45 @@ function App() {
           onToggleWarpEdit={toggleWarpEdit}
         />
       </main>
-      {settingsOpen ? (
-        <SettingsModal
-          settings={settings}
-          fonts={fonts}
-          onClose={() => setSettingsOpen(false)}
-          onSave={saveSettings}
-          onUploadFont={(file, name) => uploadFont(file, name)}
-        />
-      ) : null}
     </div>
+  );
+}
+
+function PageTopbar({
+  project,
+  episode,
+  stats,
+  jobs,
+  children,
+  onOpenProjects,
+  onOpenSettings,
+  onOpenEditor,
+  canOpenEditor,
+  onSave,
+}) {
+  return (
+    <header className={children ? "topbar" : "topbar page-topbar"}>
+      <div className="brand">
+        <span className="brand-mark">WT</span>
+        <div>
+          <strong>Webtoon Translation Studio</strong>
+          <small>Yerel çeviri ve düzenleme stüdyosu</small>
+        </div>
+        <nav className="top-nav" aria-label="Ana gezinme">
+          <button type="button" onClick={onOpenProjects}><Home size={15} /> Projeler</button>
+          <button type="button" onClick={onOpenEditor} disabled={!canOpenEditor}><FileImage size={15} /> Editör</button>
+          <button type="button" onClick={onOpenSettings}><Settings size={15} /> Ayarlar</button>
+        </nav>
+      </div>
+      <SessionSummary project={project} episode={episode} stats={stats} />
+      {children || <div className="toolbar page-toolbar"><span className="toolbar-label">Stüdyo</span></div>}
+      <JobStatusBar jobs={jobs} />
+      <div className="top-actions">
+        <button className="primary-action" onClick={onSave} disabled={!canOpenEditor}>
+          <Save size={17} /> Kaydet
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -597,42 +671,101 @@ function SessionSummary({ project, episode, stats }) {
   );
 }
 
-function ProjectSidebar({ projects, episodes, session, boxes, pages, activePageId, onProject, onEpisode, onPage }) {
+function ProjectHome({ projects, episodes, session, notice, onProject, onOpenEpisode, onOpenSettings }) {
+  const activeProject = projects.find((project) => project.id === session.projectId);
+  return (
+    <main className="project-page">
+      <section className="project-hero">
+        <div>
+          <span className="panel-kicker">Başlangıç</span>
+          <h1>Çalışacağın bölümü seç</h1>
+          <p>Projeler ve bölümler burada ayrılır; editör sadece açık bölümün çizim, OCR, çeviri ve yerleştirme işlerine odaklanır.</p>
+        </div>
+        <button type="button" className="ghost" onClick={onOpenSettings}><Settings size={16} /> Ayarlar</button>
+      </section>
+      {notice ? <div className="notice project-notice">{notice}</div> : null}
+      <section className="project-layout">
+        <aside className="project-list-panel">
+          <div className="panel-section-head">
+            <span>Projeler</span>
+            <small>{projects.length || "Boş"}</small>
+          </div>
+          <div className="project-list">
+            {projects.length ? projects.map((project) => (
+              <button
+                key={project.id}
+                type="button"
+                className={project.id === session.projectId ? "project-row active" : "project-row"}
+                onClick={() => onProject(project.id)}
+              >
+                <FolderOpen size={17} />
+                <span>{project.name}</span>
+                <ChevronRight size={15} />
+              </button>
+            )) : (
+              <div className="side-empty">
+                data/projects altında proje klasörü bulunduğunda burada listelenir.
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <section className="episode-panel">
+          <div className="panel-head">
+            <div>
+              <span className="panel-kicker">Bölümler</span>
+              <h2>{activeProject?.name || "Proje seç"}</h2>
+            </div>
+            <span className="count-badge">{episodes.length}</span>
+          </div>
+          {activeProject ? (
+            <div className="episode-grid">
+              {episodes.length ? episodes.map((episode) => (
+                <button
+                  key={episode.id}
+                  type="button"
+                  className="episode-card"
+                  onClick={() => onOpenEpisode(episode.id)}
+                >
+                  <span className="episode-icon"><FileImage size={18} /></span>
+                  <span>
+                    <strong>{episode.name}</strong>
+                    <small>Editörde aç</small>
+                  </span>
+                  <ChevronRight size={16} />
+                </button>
+              )) : (
+                <div className="empty-panel">
+                  <CircleAlert size={22} />
+                  <h2>Bölüm bulunamadı</h2>
+                  <p>Bu proje altında bölüm klasörü varsa backend yeniden tarandığında burada görünür.</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="empty-panel">
+              <FolderOpen size={24} />
+              <h2>Önce proje seç</h2>
+              <p>Sol listeden bir proje seçtiğinde bölümleri burada açabilirsin.</p>
+            </div>
+          )}
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage }) {
   const placedCount = boxes.filter((box) => box.status === "placed").length;
   const translatedCount = boxes.filter((box) => box.translatedText).length;
   return (
     <aside className="sidebar">
       <div className="panel-head">
         <div>
-          <span className="panel-kicker">Çalışma Alanı</span>
-          <h2>Projeler</h2>
+          <span className="panel-kicker">Bölüm</span>
+          <h2>Sayfalar</h2>
         </div>
-        <FolderOpen size={18} />
-      </div>
-
-      <div className="field-stack">
-        <label>
-          <span>Proje</span>
-          <select value={session.projectId} onChange={(event) => onProject(event.target.value)}>
-            <option value="">Proje seç</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Bölüm</span>
-          <select value={session.episodeId} onChange={(event) => onEpisode(event.target.value)} disabled={!session.projectId}>
-            <option value="">Bölüm seç</option>
-            {episodes.map((episode) => (
-              <option key={episode.id} value={episode.id}>
-                {episode.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <button type="button" className="tool" onClick={onBackToProjects} title="Projelere dön" aria-label="Projelere dön"><Home size={17} /></button>
       </div>
 
       <div className="sidebar-metrics" aria-label="Bölüm özeti">
@@ -1385,7 +1518,7 @@ function Inspector({
   );
 }
 
-function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
+function SettingsPage({ settings, fonts, onClose, onSave, onUploadFont }) {
   const [draft, setDraft] = useState(() => draftSettings(settings));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1472,14 +1605,14 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
   }
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
+    <main className="settings-page">
       <form className="settings-dialog" onSubmit={submit}>
         <div className="settings-head">
           <div>
             <h2>Ayarlar</h2>
-            <span>Yapay zeka ve işlem ayarları</span>
+            <span>Yapay zeka, font, temizleme ve reader senkronizasyonu</span>
           </div>
-          <button type="button" className="tool" onClick={onClose} title="Kapat"><X size={18} /></button>
+          <button type="button" className="ghost" onClick={onClose}><ChevronRight size={16} /> Geri dön</button>
         </div>
 
         <div className="settings-body">
@@ -1594,7 +1727,7 @@ function SettingsModal({ settings, fonts, onClose, onSave, onUploadFont }) {
           <button type="submit" className="primary-action" disabled={saving}>{saving ? "Kaydediliyor" : "Kaydet"}</button>
         </div>
       </form>
-    </div>
+    </main>
   );
 }
 
