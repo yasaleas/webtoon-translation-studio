@@ -413,34 +413,137 @@ def extract_paddle_analysis(output: Any) -> dict[str, Any]:
 
 def extract_paddle_text(output: Any) -> str:
     fragments: list[str] = []
+    seen: set[int] = set()
 
-    def walk(value: Any) -> None:
+    text_keys = {
+        "text",
+        "texts",
+        "rec_text",
+        "rec_texts",
+        "text_content",
+        "ocr_text",
+        "transcription",
+        "markdown",
+        "markdown_text",
+        "markdown_texts",
+        "block_content",
+        "content",
+    }
+    skip_string_keys = {
+        "input_path",
+        "page_path",
+        "img_path",
+        "image_path",
+        "file_path",
+        "save_path",
+        "output_path",
+        "path",
+        "filename",
+        "file",
+        "model",
+        "label",
+        "labels",
+        "category",
+        "type",
+        "orientation",
+    }
+
+    def add_fragment(value: str) -> None:
+        for line in value.splitlines():
+            text = remove_inline_ocr_artifacts(line.strip()).strip()
+            if is_valid_ocr_text_fragment(text):
+                fragments.append(text)
+
+    def looks_like_scored_text(value: list[Any] | tuple[Any, ...]) -> bool:
+        return len(value) >= 2 and isinstance(value[0], str) and is_number(value[1])
+
+    def walk(value: Any, text_context: bool = False) -> None:
         if value is None:
             return
         if isinstance(value, str):
-            if value.strip():
-                fragments.append(value.strip())
+            if text_context:
+                add_fragment(value)
             return
         if isinstance(value, dict):
-            for key in ("text", "rec_text", "rec_texts", "text_content", "markdown"):
-                if key in value:
-                    walk(value[key])
-            for item in value.values():
-                walk(item)
+            value_id = id(value)
+            if value_id in seen:
+                return
+            seen.add(value_id)
+            for item_key, item in value.items():
+                normalized_key = str(item_key).lower()
+                if normalized_key in skip_string_keys:
+                    continue
+                if normalized_key in text_keys:
+                    walk(item, True)
+            for item_key, item in value.items():
+                normalized_key = str(item_key).lower()
+                if normalized_key in text_keys or normalized_key in skip_string_keys:
+                    continue
+                if not isinstance(item, str):
+                    walk(item, False)
             return
         if isinstance(value, (list, tuple)):
+            value_id = id(value)
+            if value_id in seen:
+                return
+            seen.add(value_id)
+            if looks_like_scored_text(value):
+                add_fragment(value[0])
+                return
             for item in value:
-                walk(item)
+                walk(item, text_context)
             return
-        for attr in ("json", "res", "text", "markdown"):
+        for attr in ("json", "res"):
             if hasattr(value, attr):
                 try:
-                    walk(getattr(value, attr))
+                    walk(getattr(value, attr), False)
+                except Exception:
+                    pass
+        for attr in ("text", "markdown"):
+            if hasattr(value, attr):
+                try:
+                    walk(getattr(value, attr), True)
                 except Exception:
                     pass
 
     walk(output)
     return "\n".join(dict.fromkeys(fragments)).strip()
+
+
+def sanitize_ocr_text(text: str) -> str:
+    lines = []
+    for line in str(text or "").splitlines():
+        fragment = remove_inline_ocr_artifacts(line.strip()).strip()
+        if is_valid_ocr_text_fragment(fragment):
+            lines.append(fragment)
+    return "\n".join(lines).strip()
+
+
+def remove_inline_ocr_artifacts(text: str) -> str:
+    return re.sub(
+        r"\s*(?:[A-Za-z]:)?[/\\][^\n]*?\.ocr_[^\n]*?\.(?:png|jpe?g|webp|bmp|tiff?)(?:\s+(?:min|general))*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def is_valid_ocr_text_fragment(text: str) -> bool:
+    if not text:
+        return False
+    normalized = text.strip().lower()
+    if normalized in {"min", "general"}:
+        return False
+    if looks_like_image_path(text):
+        return False
+    return True
+
+
+def looks_like_image_path(text: str) -> bool:
+    candidate = text.strip().strip("()[]<>\"'")
+    if "/" not in candidate and "\\" not in candidate:
+        return False
+    return bool(re.search(r"\.(?:png|jpe?g|webp|bmp|tiff?)(?:$|[\"')>\]])", candidate, re.IGNORECASE))
 
 
 def extract_paddle_polygons(output: Any) -> list[list[tuple[float, float]]]:
@@ -701,6 +804,7 @@ def detect_punctuation_text(image_file: Path) -> str:
 def translate_texts(texts: list[str], target_language: str) -> list[str]:
     if not texts:
         return []
+    texts = [sanitize_ocr_text(text) or text for text in texts]
     api_key = active_gemini_api_key()
     if not api_key:
         raise RuntimeError("Gemini çalışması için Ayarlar menüsünden aktif API key seçilmeli.")
@@ -920,6 +1024,7 @@ def strip_code_fence(text: str) -> str:
 
 def clean_translation_text(text: str) -> str:
     text = strip_number_prefix(strip_code_fence(text))
+    text = remove_inline_ocr_artifacts(text)
     text = text.strip().strip('"').strip()
     return re.sub(r"\s+", " ", text)
 
