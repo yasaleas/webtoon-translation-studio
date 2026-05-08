@@ -1291,9 +1291,9 @@ textarea:focus-visible {
 
 .page-mode {
   min-height: 100vh;
-  height: auto;
+  height: 100vh;
   grid-template-rows: auto minmax(0, 1fr);
-  overflow: auto;
+  overflow: hidden;
 }
 
 .page-topbar {
@@ -1601,7 +1601,7 @@ button:disabled {
 .project-page,
 .settings-page {
   min-height: 0;
-  overflow: visible;
+  overflow: auto;
   padding: 24px;
   background: var(--app-bg);
 }
@@ -2065,7 +2065,7 @@ button:disabled {
 
 .settings-page .settings-head {
   position: sticky;
-  top: 0;
+  top: -24px;
   z-index: 3;
 }
 
@@ -2253,6 +2253,10 @@ button:disabled {
   .project-page,
   .settings-page {
     padding: 12px;
+  }
+
+  .settings-page .settings-head {
+    top: -12px;
   }
 
   .episode-grid {

@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from .config import PROJECTS_DIR
-from .settings import ai_value, clamp_float, load_settings
+from .settings import ai_bool, ai_value, clamp_float, load_settings
 from .services.ai import detect_text_regions, inpaint_mask, inpaint_region, run_ocr_with_geometry, sanitize_ocr_text, translate_texts
 from .storage import (
     add_box,
@@ -132,18 +132,33 @@ def ocr(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> d
         ids = set(box_ids or [box["id"] for box in state["boxes"]])
         selected = [box for box in state["boxes"] if box["id"] in ids]
         total = max(1, len(selected))
+        failed = 0
+        completed = 0
+        last_error = ""
         for index, box in enumerate(selected, start=1):
             advance(job, int(((index - 1) / total) * 95), f"OCR çalışıyor ({index}/{total})")
-            result = run_ocr_with_geometry(image_path(project_id, episode_id, box["pageId"]), box)
-            patch = {"sourceText": sanitize_ocr_text(result["text"]) or result["text"], "status": "ocr"}
-            if result.get("corners"):
-                patch["corners"] = result["corners"]
-            update_box(
-                project_id,
-                episode_id,
-                box["id"],
-                patch,
-            )
+            try:
+                result = run_ocr_with_geometry(image_path(project_id, episode_id, box["pageId"]), box)
+                patch = {"sourceText": sanitize_ocr_text(result["text"]) or result["text"], "status": "ocr"}
+                if result.get("corners"):
+                    patch["corners"] = result["corners"]
+                update_box(
+                    project_id,
+                    episode_id,
+                    box["id"],
+                    patch,
+                )
+                completed += 1
+            except Exception as error:
+                if ai_bool("strictMode", "AI_STRICT"):
+                    raise
+                failed += 1
+                last_error = str(error)
+                update_box(project_id, episode_id, box["id"], {"status": "failed"})
+        if failed and not completed:
+            raise RuntimeError(last_error or "OCR hiçbir kutuda tamamlanamadı.")
+        if failed:
+            return complete(job, f"OCR tamamlandı. {completed} kutu işlendi, {failed} kutu atlandı. Son hata: {last_error}")
         return complete(job, "OCR tamamlandı")
     except Exception as error:
         return fail(job, error)

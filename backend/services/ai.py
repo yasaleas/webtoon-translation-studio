@@ -374,7 +374,22 @@ def run_paddleocr_analysis(image_file: Path) -> dict[str, Any]:
                 )
 
         kind, pipeline = _OCR_PIPELINE
-        output = pipeline.predict(str(image_file))
+        try:
+            output = pipeline.predict(str(image_file))
+        except Exception:
+            from paddleocr import PaddleOCR
+
+            _OCR_PIPELINE = (
+                "ocr",
+                PaddleOCR(
+                    lang=str(ai_value("ocrLanguage", "OCR_LANG", "en")),
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False,
+                ),
+            )
+            kind, pipeline = _OCR_PIPELINE
+            output = pipeline.predict(str(image_file))
         analysis = extract_paddle_analysis(output)
         if kind == "vl" and not analysis["polygons"]:
             try:
