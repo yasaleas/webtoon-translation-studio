@@ -1601,7 +1601,7 @@ button:disabled {
 .project-page,
 .settings-page {
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding: 24px;
   background: var(--app-bg);
 }
@@ -2041,14 +2041,40 @@ button:disabled {
 .settings-page .settings-dialog {
   width: min(1120px, 100%);
   max-height: none;
-  min-height: calc(100vh - 48px);
+  min-height: 0;
+  display: block;
   margin: 0 auto;
   box-shadow: none;
+  overflow: visible;
 }
 
 .settings-page .settings-body {
   align-content: start;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: visible;
+  padding-bottom: 18px;
+}
+
+.settings-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-page .settings-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.settings-page .settings-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin-top: 12px;
+  box-shadow: 0 -14px 28px rgba(0, 0, 0, 0.24);
 }
 
 .settings-page .settings-section {

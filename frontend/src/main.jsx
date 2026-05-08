@@ -1612,7 +1612,10 @@ function SettingsPage({ settings, fonts, onClose, onSave, onUploadFont }) {
             <h2>Ayarlar</h2>
             <span>Yapay zeka, font, temizleme ve reader senkronizasyonu</span>
           </div>
-          <button type="button" className="ghost" onClick={onClose}><ChevronRight size={16} /> Geri dön</button>
+          <div className="settings-head-actions">
+            <button type="button" className="ghost" onClick={onClose}><ChevronRight size={16} /> Geri dön</button>
+            <button type="submit" className="primary-action" disabled={saving}>{saving ? "Kaydediliyor" : "Kaydet"}</button>
+          </div>
         </div>
 
         <div className="settings-body">
