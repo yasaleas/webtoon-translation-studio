@@ -295,7 +295,7 @@ def run_ocr_with_geometry(image_file: str | Path, box: dict[str, Any]) -> dict[s
     crop_file = crop_box(Path(image_file), box)
     try:
         analysis = run_paddleocr_analysis(crop_file)
-        text = analysis["text"] or detect_punctuation_text(crop_file)
+        text = sanitize_ocr_text(analysis["text"]) or detect_punctuation_text(crop_file)
         corners = ocr_corners_from_polygons(analysis.get("polygons") or [], box, crop_size(crop_file))
         result: dict[str, Any] = {"text": text}
         if corners:

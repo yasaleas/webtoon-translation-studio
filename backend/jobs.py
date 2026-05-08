@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .config import PROJECTS_DIR
 from .settings import ai_value, clamp_float, load_settings
-from .services.ai import detect_text_regions, inpaint_mask, inpaint_region, run_ocr_with_geometry, translate_texts
+from .services.ai import detect_text_regions, inpaint_mask, inpaint_region, run_ocr_with_geometry, sanitize_ocr_text, translate_texts
 from .storage import (
     add_box,
     add_manual_mask,
@@ -135,7 +135,7 @@ def ocr(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> d
         for index, box in enumerate(selected, start=1):
             advance(job, int(((index - 1) / total) * 95), f"OCR çalışıyor ({index}/{total})")
             result = run_ocr_with_geometry(image_path(project_id, episode_id, box["pageId"]), box)
-            patch = {"sourceText": result["text"], "status": "ocr"}
+            patch = {"sourceText": sanitize_ocr_text(result["text"]) or result["text"], "status": "ocr"}
             if result.get("corners"):
                 patch["corners"] = result["corners"]
             update_box(
