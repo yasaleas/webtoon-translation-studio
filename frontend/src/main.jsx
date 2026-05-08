@@ -4,10 +4,15 @@ import {
   AlignCenter,
   Bold,
   BoxSelect,
+  CheckCircle2,
   ChevronRight,
+  CircleAlert,
+  Clock3,
   Eraser,
   FileImage,
+  FolderOpen,
   Languages,
+  Layers3,
   MousePointer2,
   Paintbrush,
   Plus,
@@ -18,6 +23,7 @@ import {
   Settings,
   SlidersHorizontal,
   Trash2,
+  Type,
   WandSparkles,
   X,
   ZoomIn,
@@ -150,6 +156,14 @@ function App() {
     return selectedBoxIds.filter((id) => ids.has(id));
   }, [boxes, selectedBoxIds]);
   const activeBox = boxes.find((box) => box.id === activeBoxId) || boxes.find((box) => validSelectedBoxIds.includes(box.id)) || orderedBoxes[0];
+  const activeProject = projects.find((project) => project.id === session.projectId);
+  const activeEpisode = episodes.find((episode) => episode.id === session.episodeId);
+  const sessionStats = useMemo(() => ({
+    pages: pages.length,
+    boxes: orderedBoxes.length,
+    placed: orderedBoxes.filter((box) => box.status === "placed").length,
+    translated: orderedBoxes.filter((box) => box.translatedText).length,
+  }), [pages.length, orderedBoxes]);
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -427,8 +441,10 @@ function App() {
             <small>Yerel çeviri ve düzenleme stüdyosu</small>
           </div>
         </div>
+        <SessionSummary project={activeProject} episode={activeEpisode} stats={sessionStats} />
         <JobStatusBar jobs={jobs} />
         <div className="toolbar">
+          <span className="toolbar-label">Araç</span>
           <ToolButton active={tool === "select"} icon={MousePointer2} label="Seç" onClick={() => setTool("select")} />
           <ToolButton active={tool === "box"} icon={BoxSelect} label="Yazı alanı çiz" onClick={() => setTool("box")} />
           <ToolButton active={tool === "brush"} icon={Paintbrush} label="Fırça ile temizle" onClick={() => setTool("brush")} />
@@ -461,6 +477,7 @@ function App() {
           projects={projects}
           episodes={episodes}
           session={session}
+          boxes={orderedBoxes}
           pages={pages}
           activePageId={activePage?.id}
           onProject={(projectId) => setSession({ projectId, episodeId: "" })}
@@ -563,67 +580,157 @@ function App() {
   );
 }
 
-function ProjectSidebar({ projects, episodes, session, pages, activePageId, onProject, onEpisode, onPage }) {
+function SessionSummary({ project, episode, stats }) {
+  const hasEpisode = Boolean(project && episode);
+  return (
+    <section className={hasEpisode ? "session-summary" : "session-summary muted"} aria-label="Aktif bölüm">
+      <div>
+        <span>{project?.name || "Proje seçilmedi"}</span>
+        <strong>{episode?.name || "Bölüm bekleniyor"}</strong>
+      </div>
+      <div className="summary-metrics">
+        <span>{stats.pages} sayfa</span>
+        <span>{stats.boxes} kutu</span>
+        <span>{stats.placed} yerleşti</span>
+      </div>
+    </section>
+  );
+}
+
+function ProjectSidebar({ projects, episodes, session, boxes, pages, activePageId, onProject, onEpisode, onPage }) {
+  const placedCount = boxes.filter((box) => box.status === "placed").length;
+  const translatedCount = boxes.filter((box) => box.translatedText).length;
   return (
     <aside className="sidebar">
-      <div className="panel-title">Projeler</div>
-      <select value={session.projectId} onChange={(event) => onProject(event.target.value)}>
-        <option value="">Proje seç</option>
-        {projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))}
-      </select>
-      <select value={session.episodeId} onChange={(event) => onEpisode(event.target.value)} disabled={!session.projectId}>
-        <option value="">Bölüm seç</option>
-        {episodes.map((episode) => (
-          <option key={episode.id} value={episode.id}>
-            {episode.name}
-          </option>
-        ))}
-      </select>
-
-      <div className="panel-title with-gap">Sayfalar</div>
-      <div className="page-list">
-        {pages.map((page, index) => (
-          <button key={page.id} className={page.id === activePageId ? "page-row active" : "page-row"} onClick={() => onPage(page.id)}>
-            <FileImage size={16} />
-            <span>{index + 1}. {page.name}</span>
-            <ChevronRight size={15} />
-          </button>
-        ))}
+      <div className="panel-head">
+        <div>
+          <span className="panel-kicker">Çalışma Alanı</span>
+          <h2>Projeler</h2>
+        </div>
+        <FolderOpen size={18} />
       </div>
+
+      <div className="field-stack">
+        <label>
+          <span>Proje</span>
+          <select value={session.projectId} onChange={(event) => onProject(event.target.value)}>
+            <option value="">Proje seç</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Bölüm</span>
+          <select value={session.episodeId} onChange={(event) => onEpisode(event.target.value)} disabled={!session.projectId}>
+            <option value="">Bölüm seç</option>
+            {episodes.map((episode) => (
+              <option key={episode.id} value={episode.id}>
+                {episode.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="sidebar-metrics" aria-label="Bölüm özeti">
+        <Metric label="Sayfa" value={pages.length} />
+        <Metric label="Kutu" value={boxes.length} />
+        <Metric label="Çeviri" value={translatedCount} />
+        <Metric label="Yerleşti" value={placedCount} />
+      </div>
+
+      <div className="panel-section-head">
+        <span>Sayfalar</span>
+        <small>{pages.length || "Boş"}</small>
+      </div>
+      {pages.length ? (
+        <div className="page-list">
+          {pages.map((page, index) => (
+            <button key={page.id} className={page.id === activePageId ? "page-row active" : "page-row"} onClick={() => onPage(page.id)}>
+              <FileImage size={16} />
+              <span>{index + 1}. {page.name}</span>
+              <ChevronRight size={15} />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="side-empty">
+          Proje ve bölüm seçildiğinde sayfalar burada listelenir.
+        </div>
+      )}
     </aside>
+  );
+}
+
+function Metric({ label, value }) {
+  return (
+    <div>
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const normalized = normalizeStatus(status);
+  const Icon = normalized === "placed" ? CheckCircle2 : normalized === "failed" ? CircleAlert : Clock3;
+  return (
+    <span className={`status-badge status-${normalized}`}>
+      <Icon size={12} />
+      {statusLabel(status)}
+    </span>
   );
 }
 
 function ActionBar({ targetLanguage, setTargetLanguage, fonts, defaultFont, onDefaultFontChange, runJob, refreshState }) {
   return (
-    <div className="actionbar">
-      <button onClick={() => runJob("detect")}><WandSparkles size={16} /> Yazıları seç</button>
-      <button onClick={() => runJob("ocr")}><ScanText size={16} /> OCR</button>
-      <button onClick={() => runJob("inpaint")}><Eraser size={16} /> Sil</button>
-      <div className="language-control">
-        <Languages size={16} />
-        <input value={targetLanguage} onChange={(event) => setTargetLanguage(event.target.value.toUpperCase())} />
+    <div className="actionbar" aria-label="Bölüm işlemleri">
+      <div className="action-group">
+        <span>Hazırlık</span>
+        <button onClick={() => runJob("detect")}><WandSparkles size={16} /> Yazıları seç</button>
+        <button onClick={() => runJob("ocr")}><ScanText size={16} /> OCR</button>
+        <button onClick={() => runJob("inpaint")}><Eraser size={16} /> Sil</button>
       </div>
-      <select className="font-control" value={defaultFont || fonts[0]?.id || ""} onChange={(event) => onDefaultFontChange(event.target.value)}>
-        {fonts.map((font) => (
-          <option key={font.id} value={font.id}>{font.name}</option>
-        ))}
-      </select>
-      <button onClick={() => runJob("translate", { targetLanguage })}><Languages size={16} /> Çevir</button>
-      <button onClick={() => runJob("place")}><AlignCenter size={16} /> Yerleştir</button>
-      <button onClick={() => runJob("unplace")}><X size={16} /> Yerleşimi kaldır</button>
-      <button className="ghost" onClick={refreshState}><RefreshCcw size={16} /> Yenile</button>
+      <div className="action-group">
+        <span>Çeviri</span>
+        <div className="language-control">
+          <Languages size={16} />
+          <input value={targetLanguage} onChange={(event) => setTargetLanguage(event.target.value.toUpperCase())} aria-label="Hedef dil" />
+        </div>
+        <select className="font-control" value={defaultFont || fonts[0]?.id || ""} onChange={(event) => onDefaultFontChange(event.target.value)} aria-label="Varsayılan font">
+          {fonts.map((font) => (
+            <option key={font.id} value={font.id}>{font.name}</option>
+          ))}
+        </select>
+        <button onClick={() => runJob("translate", { targetLanguage })}><Languages size={16} /> Çevir</button>
+      </div>
+      <div className="action-group">
+        <span>Çıktı</span>
+        <button onClick={() => runJob("place")}><AlignCenter size={16} /> Yerleştir</button>
+        <button onClick={() => runJob("unplace")}><X size={16} /> Kaldır</button>
+        <button className="ghost" onClick={refreshState}><RefreshCcw size={16} /> Yenile</button>
+      </div>
     </div>
   );
 }
 
 function JobStatusBar({ jobs }) {
   const job = visibleJob(jobs);
-  if (!job) return <div className="job-status empty" aria-hidden="true" />;
+  if (!job) {
+    return (
+      <div className="job-status idle">
+        <div>
+          <span>Hazır</span>
+          <strong>İş kuyruğu beklemede</strong>
+          <em>0%</em>
+        </div>
+        <b><i style={{ width: "0%" }} /></b>
+      </div>
+    );
+  }
   const progress = clamp(Number(job.progress || 0), 0, 100);
   return (
     <div className={`job-status ${job.status}`}>
@@ -1163,9 +1270,15 @@ function Inspector({
 
   return (
     <aside className="inspector">
-      <div className="panel-title">Yazı Akışı</div>
+      <div className="panel-head compact">
+        <div>
+          <span className="panel-kicker">Kutular</span>
+          <h2>Yazı Akışı</h2>
+        </div>
+        <span className="count-badge">{boxes.length}</span>
+      </div>
       <div className="box-list">
-        {boxes.map((item) => (
+        {boxes.length ? boxes.map((item) => (
           <button
             key={item.id}
             ref={(node) => {
@@ -1179,11 +1292,18 @@ function Inspector({
               onSelect(item.id, additive, preserveSelection);
             }}
           >
-            <span>{boxLabel(item, pages)}</span>
-            <strong>{item.translatedText || item.sourceText || "Metin bekliyor"}</strong>
-            <em>{item.status}</em>
+            <span className="box-order">{boxLabel(item, pages)}</span>
+            <span className="box-row-main">
+              <strong>{item.translatedText || item.sourceText || "Metin bekliyor"}</strong>
+              <small>{item.sourceText ? "Kaynak metin var" : "OCR bekliyor"}</small>
+            </span>
+            <StatusBadge status={item.status} />
           </button>
-        ))}
+        )) : (
+          <div className="side-empty">
+            Yazıları seçtiğinde veya elle kutu çizdiğinde akış burada görünür.
+          </div>
+        )}
       </div>
 
       {box ? (
@@ -1193,57 +1313,73 @@ function Inspector({
               <h2>{selectedCount > 1 && selectedBoxIds.includes(box.id) ? `${selectedCount} Kutu Seçili` : `${boxLabel(box, pages)} Düzenle`}</h2>
               {selectedCount > 1 && selectedBoxIds.includes(box.id) ? <span>Aktif kutu: {boxLabel(box, pages)}</span> : null}
             </div>
+            <StatusBadge status={box.status} />
             <button className="icon-danger" onClick={() => onDelete(box)} title={activeSelectionIds.length > 1 ? "Seçili kutuları sil" : "Kutuyu sil"}><Trash2 size={16} /></button>
           </div>
-          <label>Orijinal metin</label>
-          <textarea value={box.sourceText} onChange={(event) => onPatch(box.id, { sourceText: event.target.value })} />
-          <label>Çeviri</label>
-          <textarea value={box.translatedText} onChange={(event) => onPatch(box.id, { translatedText: event.target.value })} />
-          <div className="inline-tools">
-            <button onClick={() => onSingleOcr(box)}><Search size={15} /> OCR{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
-            <button onClick={() => onSingleInpaint(box)}><Eraser size={15} /> Sil{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
-            <button onClick={() => onSinglePlace(box)}><AlignCenter size={15} /> Yerleştir{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
-            <button onClick={() => onSingleUnplace(box)}><X size={15} /> Kaldır{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
-            <button onClick={() => onRestoreOriginal(box)}><RefreshCcw size={15} /> Orijinale dön{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
-          </div>
-          <div className="style-grid">
-            <label className="wide">Font<select value={style.fontFamily || "noto-sans-black"} onChange={(event) => onPatch(box.id, { style: { ...style, fontFamily: event.target.value } }, { stylePatch: { fontFamily: event.target.value } })}>
-              {fonts.map((font) => (
-                <option key={font.id} value={font.id}>{font.name}</option>
-              ))}
-            </select></label>
-            <label>Boyut<input type="number" min="6" max="240" value={fontSize} onChange={(event) => {
-              const next = positiveNumber(event.target.value, fontSize);
-              onPatch(box.id, { style: { ...style, fontSize: next } }, { stylePatch: { fontSize: next } });
-            }} /></label>
-            <label>Renk<input type="color" value={style.color || "#111111"} onChange={(event) => onPatch(box.id, { style: { ...style, color: event.target.value } }, { stylePatch: { color: event.target.value } })} /></label>
-            <label>Kontur<input type="color" value={style.strokeColor || "#ffffff"} onChange={(event) => onPatch(box.id, { style: { ...style, strokeColor: event.target.value } }, { stylePatch: { strokeColor: event.target.value } })} /></label>
-            <button className="toggle" onClick={() => onPatch(box.id, { style: { ...style, bold: !style.bold } }, { stylePatch: { bold: !style.bold } })}><Bold size={15} /> Kalın</button>
-            <label>Genişlik <span>{Number(style.scaleX || 1).toFixed(2)}x</span><input type="range" min="0.5" max="2.5" step="0.05" value={style.scaleX || 1} onChange={(event) => {
-              const next = Number(event.target.value);
-              onPatch(box.id, { style: { ...style, scaleX: next } }, { stylePatch: { scaleX: next } });
-            }} /></label>
-            <label>Döndür <span>{style.rotation || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.rotation || 0} onChange={(event) => {
-              const next = Number(event.target.value);
-              onPatch(box.id, { style: { ...style, rotation: next } }, { stylePatch: { rotation: next } });
-            }} /></label>
-            <label>Perspektif X <span>{style.perspectiveX || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveX || 0} onChange={(event) => {
-              const next = Number(event.target.value);
-              onPatch(box.id, { style: { ...style, perspectiveX: next } }, { stylePatch: { perspectiveX: next } });
-            }} /></label>
-            <label>Perspektif Y <span>{style.perspectiveY || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveY || 0} onChange={(event) => {
-              const next = Number(event.target.value);
-              onPatch(box.id, { style: { ...style, perspectiveY: next } }, { stylePatch: { perspectiveY: next } });
-            }} /></label>
-            <label>Eğiklik <span>{style.skewX || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.skewX || 0} onChange={(event) => {
-              const next = Number(event.target.value);
-              onPatch(box.id, { style: { ...style, skewX: next } }, { stylePatch: { skewX: next } });
-            }} /></label>
-            <button className={warpEditBoxId === box.id ? "toggle wide-button active" : "toggle wide-button"} onClick={() => onToggleWarpEdit(box)}><SlidersHorizontal size={15} /> Köşe modu</button>
-            <button className="toggle wide-button" onClick={() => onPatch(box.id, { corners: defaultWarpCorners(), style: { ...style, ...perspectiveResetStyle } }, { stylePatch: perspectiveResetStyle })}><SlidersHorizontal size={15} /> Perspektifi sıfırla</button>
-          </div>
+          <section className="detail-section">
+            <div className="section-title"><Type size={14} /> Metin</div>
+            <label>Orijinal metin</label>
+            <textarea value={box.sourceText} onChange={(event) => onPatch(box.id, { sourceText: event.target.value })} />
+            <label>Çeviri</label>
+            <textarea value={box.translatedText} onChange={(event) => onPatch(box.id, { translatedText: event.target.value })} />
+          </section>
+          <section className="detail-section">
+            <div className="section-title"><Layers3 size={14} /> Hızlı işlemler</div>
+            <div className="inline-tools">
+              <button onClick={() => onSingleOcr(box)}><Search size={15} /> OCR{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+              <button onClick={() => onSingleInpaint(box)}><Eraser size={15} /> Sil{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+              <button onClick={() => onSinglePlace(box)}><AlignCenter size={15} /> Yerleştir{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+              <button onClick={() => onSingleUnplace(box)}><X size={15} /> Kaldır{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+              <button onClick={() => onRestoreOriginal(box)}><RefreshCcw size={15} /> Orijinale dön{activeSelectionIds.length > 1 ? ` (${activeSelectionIds.length})` : ""}</button>
+            </div>
+          </section>
+          <section className="detail-section">
+            <div className="section-title"><SlidersHorizontal size={14} /> Stil ve geometri</div>
+            <div className="style-grid">
+              <label className="wide">Font<select value={style.fontFamily || "noto-sans-black"} onChange={(event) => onPatch(box.id, { style: { ...style, fontFamily: event.target.value } }, { stylePatch: { fontFamily: event.target.value } })}>
+                {fonts.map((font) => (
+                  <option key={font.id} value={font.id}>{font.name}</option>
+                ))}
+              </select></label>
+              <label>Boyut<input type="number" min="6" max="240" value={fontSize} onChange={(event) => {
+                const next = positiveNumber(event.target.value, fontSize);
+                onPatch(box.id, { style: { ...style, fontSize: next } }, { stylePatch: { fontSize: next } });
+              }} /></label>
+              <label>Renk<input type="color" value={style.color || "#111111"} onChange={(event) => onPatch(box.id, { style: { ...style, color: event.target.value } }, { stylePatch: { color: event.target.value } })} /></label>
+              <label>Kontur<input type="color" value={style.strokeColor || "#ffffff"} onChange={(event) => onPatch(box.id, { style: { ...style, strokeColor: event.target.value } }, { stylePatch: { strokeColor: event.target.value } })} /></label>
+              <button className="toggle" onClick={() => onPatch(box.id, { style: { ...style, bold: !style.bold } }, { stylePatch: { bold: !style.bold } })}><Bold size={15} /> Kalın</button>
+              <label>Genişlik <span>{Number(style.scaleX || 1).toFixed(2)}x</span><input type="range" min="0.5" max="2.5" step="0.05" value={style.scaleX || 1} onChange={(event) => {
+                const next = Number(event.target.value);
+                onPatch(box.id, { style: { ...style, scaleX: next } }, { stylePatch: { scaleX: next } });
+              }} /></label>
+              <label>Döndür <span>{style.rotation || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.rotation || 0} onChange={(event) => {
+                const next = Number(event.target.value);
+                onPatch(box.id, { style: { ...style, rotation: next } }, { stylePatch: { rotation: next } });
+              }} /></label>
+              <label>Perspektif X <span>{style.perspectiveX || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveX || 0} onChange={(event) => {
+                const next = Number(event.target.value);
+                onPatch(box.id, { style: { ...style, perspectiveX: next } }, { stylePatch: { perspectiveX: next } });
+              }} /></label>
+              <label>Perspektif Y <span>{style.perspectiveY || 0}</span><input type="range" min="-70" max="70" step="1" value={style.perspectiveY || 0} onChange={(event) => {
+                const next = Number(event.target.value);
+                onPatch(box.id, { style: { ...style, perspectiveY: next } }, { stylePatch: { perspectiveY: next } });
+              }} /></label>
+              <label>Eğiklik <span>{style.skewX || 0}°</span><input type="range" min="-45" max="45" step="1" value={style.skewX || 0} onChange={(event) => {
+                const next = Number(event.target.value);
+                onPatch(box.id, { style: { ...style, skewX: next } }, { stylePatch: { skewX: next } });
+              }} /></label>
+              <button className={warpEditBoxId === box.id ? "toggle wide-button active" : "toggle wide-button"} onClick={() => onToggleWarpEdit(box)}><SlidersHorizontal size={15} /> Köşe modu</button>
+              <button className="toggle wide-button" onClick={() => onPatch(box.id, { corners: defaultWarpCorners(), style: { ...style, ...perspectiveResetStyle } }, { stylePatch: perspectiveResetStyle })}><SlidersHorizontal size={15} /> Perspektifi sıfırla</button>
+            </div>
+          </section>
         </div>
-      ) : null}
+      ) : (
+        <div className="detail empty-detail">
+          <CircleAlert size={24} />
+          <h2>Aktif kutu yok</h2>
+          <p>Bir kutu seç veya yazı alanı çizerek metin düzenlemeye başla.</p>
+        </div>
+      )}
 
     </aside>
   );
@@ -1743,6 +1879,22 @@ function boxRowClassName(item, activeBox, selectedBoxIds) {
   ].filter(Boolean).join(" ");
 }
 
+function normalizeStatus(status = "pending") {
+  return String(status || "pending").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+function statusLabel(status) {
+  return {
+    pending: "Bekliyor",
+    detected: "Algılandı",
+    ocr: "OCR",
+    translated: "Çevrildi",
+    cleaned: "Temiz",
+    placed: "Yerleşti",
+    failed: "Hata",
+  }[normalizeStatus(status)] || status || "Bekliyor";
+}
+
 function orderBoxesByReadingPosition(items, pages) {
   const sorted = items.slice().sort((a, b) => {
     const pageA = pageIndex(pages, a.pageId);
@@ -1823,7 +1975,7 @@ function newGeminiKey() {
 
 function ToolButton({ icon: Icon, label, active, onClick }) {
   return (
-    <button className={active ? "tool active" : "tool"} onClick={onClick} title={label}>
+    <button type="button" className={active ? "tool active" : "tool"} onClick={onClick} title={label} aria-label={label}>
       <Icon size={18} />
     </button>
   );
