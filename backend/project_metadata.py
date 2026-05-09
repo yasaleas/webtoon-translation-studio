@@ -3,6 +3,7 @@ import json
 import re
 import unicodedata
 from difflib import SequenceMatcher
+from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -13,6 +14,7 @@ from .storage import load_project_metadata, save_project_cover, save_project_met
 ANILIST_ENDPOINT = "https://graphql.anilist.co"
 MANGADEX_API_BASE = "https://api.mangadex.org"
 MANGADEX_COVER_BASE = "https://uploads.mangadex.org/covers"
+WEBTOON_SEARCH_URL = "https://www.webtoons.com/en/search"
 MAX_COVER_BYTES = 12 * 1024 * 1024
 USER_AGENT = "WebtoonTranslationStudio/1.0"
 
@@ -80,13 +82,15 @@ def search_project_metadata(project_id: str, query: str | None = None, provider:
     if not search:
         raise ValueError("Metadata araması için başlık gerekli.")
 
-    providers = ["mangadex", "anilist"] if provider in {"", "all"} else [provider]
+    providers = ["mangadex", "webtoon", "anilist"] if provider in {"", "all"} else [provider]
     candidates: list[dict[str, Any]] = []
     errors = []
     for item in providers:
         try:
             if item == "mangadex":
                 candidates.extend(mangadex_candidates(search))
+            elif item == "webtoon":
+                candidates.extend(webtoon_candidates(search))
             elif item == "anilist":
                 candidates.extend(anilist_candidates(search))
             else:
@@ -117,6 +121,10 @@ def fetch_and_store_project_metadata(
         media = fetch_mangadex_manga(str(source_id))
         metadata = metadata_from_mangadex(project_id, media)
         cover_url = best_mangadex_cover_url(media)
+    elif provider == "webtoon":
+        media = fetch_webtoon_series(str(source_id))
+        metadata = metadata_from_webtoon(project_id, media)
+        cover_url = media.get("coverUrl", "")
     else:
         raise ValueError(f"Desteklenmeyen metadata kaynağı: {provider}")
 
@@ -215,6 +223,37 @@ def fetch_mangadex_manga(source_id: str) -> dict[str, Any]:
     return manga
 
 
+def webtoon_request(url: str) -> str:
+    request = Request(url, headers={"Accept": "text/html", "User-Agent": USER_AGENT})
+    try:
+        with urlopen(request, timeout=20) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except HTTPError as error:
+        raise RuntimeError(f"WEBTOON isteği başarısız oldu: HTTP {error.code}") from error
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError(f"WEBTOON'a ulaşılamadı: {error}") from error
+
+
+def webtoon_candidates(search: str) -> list[dict[str, Any]]:
+    url = f"{WEBTOON_SEARCH_URL}?{urlencode({'keyword': search})}"
+    parser = WebtoonSearchParser()
+    parser.feed(webtoon_request(url))
+    return [candidate_from_webtoon(item) for item in parser.items]
+
+
+def fetch_webtoon_series(source_url: str) -> dict[str, Any]:
+    if not source_url.startswith("https://www.webtoons.com/"):
+        raise ValueError("WEBTOON kaynak adresi geçersiz.")
+    parser = WebtoonDetailParser()
+    parser.feed(webtoon_request(source_url))
+    data = parser.data
+    data["sourceUrl"] = data.get("sourceUrl") or source_url
+    data["sourceId"] = title_no_from_url(source_url)
+    if not data.get("title"):
+        raise ValueError("WEBTOON sayfasından başlık okunamadı.")
+    return data
+
+
 def metadata_from_anilist(project_id: str, media: dict[str, Any]) -> dict[str, Any]:
     title = media.get("title") or {}
     synonyms = unique_titles(media.get("synonyms") or [])
@@ -275,6 +314,30 @@ def metadata_from_mangadex(project_id: str, manga: dict[str, Any]) -> dict[str, 
     }
 
 
+def metadata_from_webtoon(project_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    author = data.get("author", "")
+    return {
+        **(load_project_metadata(project_id) if project_id else {}),
+        "title": data.get("title") or project_id,
+        "originalTitle": "",
+        "author": author,
+        "artist": author,
+        "status": "",
+        "year": "",
+        "description": clean_description(data.get("description") or ""),
+        "synonyms": unique_titles([data.get("title", "")]),
+        "genres": [data["genre"]] if data.get("genre") else [],
+        "tags": [data["webtoonType"]] if data.get("webtoonType") else ["WEBTOON"],
+        "source": {
+            "provider": "webtoon",
+            "id": data.get("sourceId") or title_no_from_url(data.get("sourceUrl", "")),
+            "url": data.get("sourceUrl") or "",
+            "format": data.get("webtoonType") or "WEBTOON",
+            "country": "en",
+        },
+    }
+
+
 def candidate_from_anilist(media: dict[str, Any]) -> dict[str, Any]:
     metadata = metadata_from_anilist("", media)
     return {
@@ -294,6 +357,25 @@ def candidate_from_mangadex(manga: dict[str, Any]) -> dict[str, Any]:
         "sourceUrl": metadata.get("source", {}).get("url", ""),
         "coverUrl": best_mangadex_cover_url(manga),
         **candidate_payload(metadata),
+    }
+
+
+def candidate_from_webtoon(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "provider": "webtoon",
+        "sourceId": item.get("sourceUrl") or item.get("sourceId"),
+        "sourceUrl": item.get("sourceUrl", ""),
+        "coverUrl": item.get("coverUrl", ""),
+        "title": item.get("title", ""),
+        "originalTitle": "",
+        "author": item.get("author", ""),
+        "artist": item.get("author", ""),
+        "status": "",
+        "year": "",
+        "description": "",
+        "synonyms": unique_titles([item.get("title", "")]),
+        "genres": [item["genre"]] if item.get("genre") else [],
+        "tags": [item.get("webtoonType", "WEBTOON")],
     }
 
 
@@ -397,6 +479,100 @@ def mangadex_tag_names(tags: list[dict[str, Any]], groups: set[str]) -> list[str
         if name:
             names.append(name)
     return names[:8]
+
+
+class WebtoonSearchParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.items: list[dict[str, Any]] = []
+        self.current: dict[str, Any] | None = None
+        self.capture_key = ""
+        self.capture_tag = ""
+        self.capture_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {key: value or "" for key, value in attrs}
+        classes = set((attributes.get("class") or "").split())
+        if tag == "a" and "_card_item" in classes:
+            source_url = attributes.get("href", "")
+            self.current = {
+                "sourceUrl": source_url,
+                "sourceId": source_url,
+                "webtoonType": attributes.get("data-webtoon-type", "WEBTOON"),
+                "genre": webtoon_genre_from_url(source_url),
+            }
+            return
+        if self.current is None:
+            return
+        if tag == "img" and not self.current.get("coverUrl"):
+            self.current["coverUrl"] = attributes.get("src", "")
+        elif tag == "strong" and "title" in classes:
+            self.start_capture("title", tag)
+        elif tag == "div" and "author" in classes:
+            self.start_capture("author", tag)
+
+    def handle_data(self, data: str) -> None:
+        if self.capture_key:
+            self.capture_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.capture_key and tag == self.capture_tag:
+            if self.current is not None:
+                self.current[self.capture_key] = clean_text("".join(self.capture_parts))
+            self.start_capture("", "")
+            return
+        if tag == "a" and self.current is not None:
+            if self.current.get("title") and self.current.get("sourceUrl"):
+                self.items.append(self.current)
+            self.current = None
+
+    def start_capture(self, key: str, tag: str) -> None:
+        self.capture_key = key
+        self.capture_tag = tag
+        self.capture_parts = []
+
+
+class WebtoonDetailParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: dict[str, Any] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "meta":
+            return
+        attributes = {key: value or "" for key, value in attrs}
+        key = attributes.get("property") or attributes.get("name")
+        content = html.unescape(attributes.get("content", "")).strip()
+        if not key or not content:
+            return
+        if key == "og:title":
+            self.data["title"] = content
+        elif key == "og:description":
+            self.data["description"] = content
+        elif key == "og:image":
+            self.data["coverUrl"] = content
+        elif key == "og:url":
+            self.data["sourceUrl"] = content
+        elif key == "com-linewebtoon:webtoon:author":
+            self.data["author"] = content
+        elif key == "keywords":
+            parts = [part.strip() for part in content.split(",") if part.strip()]
+            if len(parts) > 1:
+                self.data["genre"] = parts[1]
+
+
+def webtoon_genre_from_url(source_url: str) -> str:
+    match = re.search(r"/en/([^/]+)/", source_url)
+    return match.group(1).replace("-", " ").title() if match else ""
+
+
+def title_no_from_url(source_url: str) -> str:
+    match = re.search(r"[?&]title_no=(\d+)", source_url)
+    return match.group(1) if match else source_url
+
+
+def clean_text(value: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()
 
 
 def best_anilist_cover_url(media: dict[str, Any]) -> str:

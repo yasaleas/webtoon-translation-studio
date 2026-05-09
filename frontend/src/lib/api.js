@@ -42,6 +42,23 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(metadata),
     }),
+  clearProjectMetadata: (projectId) =>
+    request(`/api/projects/${encodeURIComponent(projectId)}/metadata`, {
+      method: "DELETE",
+    }),
+  uploadProjectCover: async (projectId, file) => {
+    const form = new FormData();
+    form.append("cover", file);
+    const response = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/cover/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `API error ${response.status}`);
+    }
+    return response.json();
+  },
   openSession: (projectId, episodeId) =>
     request("/api/session/open", {
       method: "POST",

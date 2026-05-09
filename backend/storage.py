@@ -269,6 +269,17 @@ def save_project_metadata(project_id: str, metadata: dict[str, Any]) -> dict[str
     return merged
 
 
+def clear_project_metadata(project_id: str) -> dict[str, Any]:
+    path = project_metadata_file(project_id)
+    if path.exists():
+        path.unlink()
+    root = project_path(project_id)
+    for cover in root.glob(f"{PROJECT_COVER_STEM}.*"):
+        if cover.is_file():
+            cover.unlink()
+    return default_project_metadata(project_id)
+
+
 def project_cover_path(project_id: str) -> Path | None:
     root = project_path(project_id)
     metadata = load_project_metadata(project_id)

@@ -11,6 +11,7 @@ from .settings import public_settings, save_settings
 from .storage import (
     add_box,
     apply_text_style,
+    clear_project_metadata,
     delete_box,
     image_path,
     list_episodes,
@@ -25,6 +26,7 @@ from .storage import (
     restore_box_from_original,
     restore_manual_mask_from_original,
     save_project_metadata,
+    save_project_cover,
     undo_image_history,
     update_box,
 )
@@ -90,6 +92,16 @@ def create_app() -> Flask:
             return {"error": "cover not found"}, 404
         return send_file(path)
 
+    @app.post("/api/projects/<project_id>/cover/upload")
+    def upload_project_cover(project_id: str):
+        cover = request.files.get("cover")
+        if cover is None or not cover.filename:
+            return {"error": "cover not found"}, 400
+        try:
+            return jsonify(save_project_cover(project_id, cover.read(), cover.filename, cover.content_type or ""))
+        except ValueError as error:
+            return {"error": str(error)}, 400
+
     @app.get("/api/projects/<project_id>/metadata")
     def project_metadata(project_id: str):
         return jsonify(load_project_metadata(project_id))
@@ -97,6 +109,10 @@ def create_app() -> Flask:
     @app.put("/api/projects/<project_id>/metadata")
     def update_project_metadata(project_id: str):
         return jsonify(save_project_metadata(project_id, request.get_json(force=True)))
+
+    @app.delete("/api/projects/<project_id>/metadata")
+    def delete_project_metadata(project_id: str):
+        return jsonify(clear_project_metadata(project_id))
 
     @app.post("/api/projects/<project_id>/metadata/fetch")
     def fetch_project_metadata(project_id: str):

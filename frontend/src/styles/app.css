@@ -1860,7 +1860,51 @@ button:disabled {
 
 .metadata-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.metadata-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.ghost.danger {
+  color: #ffb4b4;
+  border-color: rgba(255, 107, 107, 0.32);
+}
+
+.ghost.danger:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.12);
+  border-color: rgba(255, 107, 107, 0.58);
+}
+
+.metadata-button-row .ghost {
+  flex: 1 1 120px;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.metadata-button-row .ghost svg {
+  flex: 0 0 auto;
+}
+
+.metadata-button-row .ghost {
+  white-space: nowrap;
+}
+
+.metadata-button-row .ghost:not(.danger):last-child {
+  flex-grow: 1.2;
+}
+
+.metadata-button-row .ghost,
+.metadata-actions .ghost {
+  min-height: 36px;
   gap: 8px;
 }
 
@@ -2511,8 +2555,13 @@ button:disabled {
   }
 
   .metadata-fields,
-  .metadata-actions {
+  .metadata-actions,
+  .metadata-button-row {
     grid-template-columns: 1fr;
+  }
+
+  .metadata-button-row {
+    display: grid;
   }
 
   .project-grid {

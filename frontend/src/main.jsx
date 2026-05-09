@@ -243,6 +243,39 @@ function App() {
     }
   }
 
+  async function clearProjectMetadata(projectId) {
+    if (!projectId) return;
+    const accepted = window.confirm("Bu projenin metadata bilgileri ve kapak görseli temizlenecek.");
+    if (!accepted) return;
+    setMetadataBusyProjectId(projectId);
+    try {
+      await api.clearProjectMetadata(projectId);
+      await loadProjects();
+      setMetadataCandidates({ projectId: "", items: [], errors: [] });
+      setNotice("Proje bilgileri temizlendi.");
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    } finally {
+      setMetadataBusyProjectId("");
+    }
+  }
+
+  async function uploadProjectCover(projectId, file) {
+    if (!projectId || !file) return;
+    setMetadataBusyProjectId(projectId);
+    try {
+      await api.uploadProjectCover(projectId, file);
+      await loadProjects();
+      setNotice("Kapak görseli kaydedildi.");
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    } finally {
+      setMetadataBusyProjectId("");
+    }
+  }
+
   async function openSession(projectId = session.projectId, episodeId = session.episodeId) {
     if (!projectId || !episodeId) return;
     const data = await api.openSession(projectId, episodeId);
@@ -562,6 +595,8 @@ function App() {
           onSearchMetadata={searchProjectMetadata}
           onFetchMetadata={fetchProjectMetadata}
           onSaveMetadata={saveProjectMetadata}
+          onClearMetadata={clearProjectMetadata}
+          onUploadCover={uploadProjectCover}
           onOpenSettings={() => setView("settings")}
         />
       </div>
@@ -789,6 +824,8 @@ function ProjectHome({
   onSearchMetadata,
   onFetchMetadata,
   onSaveMetadata,
+  onClearMetadata,
+  onUploadCover,
   onOpenSettings,
 }) {
   const activeProject = projects.find((project) => project.id === session.projectId);
@@ -796,6 +833,7 @@ function ProjectHome({
   const [lookupQuery, setLookupQuery] = useState("");
   const [metadataDraft, setMetadataDraft] = useState(projectMetadataDraft(activeProject));
   const metadataBusy = metadataBusyProjectId === activeProject?.id;
+  const coverInputRef = useRef(null);
 
   useEffect(() => {
     setLookupQuery(activeMetadata.title || activeProject?.folderName || activeProject?.name || "");
@@ -913,9 +951,28 @@ function ProjectHome({
                   <textarea value={metadataDraft.synonyms} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, synonyms: event.target.value }))} />
                 </label>
                 <div className="metadata-actions">
-                  <input value={lookupQuery} onChange={(event) => setLookupQuery(event.target.value)} placeholder="MangaDex + AniList araması" />
+                  <input value={lookupQuery} onChange={(event) => setLookupQuery(event.target.value)} placeholder="MangaDex + WEBTOON + AniList araması" />
                   <button type="button" className="ghost" disabled={metadataBusy} onClick={() => onSearchMetadata(activeProject.id, lookupQuery).catch(() => {})}>
                     <Search size={15} /> {metadataBusy ? "Aranıyor" : "Ara"}
+                  </button>
+                </div>
+                <input
+                  ref={coverInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden-file-input"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) onUploadCover(activeProject.id, file).catch(() => {});
+                    event.target.value = "";
+                  }}
+                />
+                <div className="metadata-button-row">
+                  <button type="button" className="ghost" disabled={metadataBusy} onClick={() => coverInputRef.current?.click()}>
+                    <Plus size={15} /> Kapak yükle
+                  </button>
+                  <button type="button" className="ghost danger" disabled={metadataBusy} onClick={() => onClearMetadata(activeProject.id).catch(() => {})}>
+                    <Trash2 size={15} /> Temizle
                   </button>
                   <button type="submit" className="ghost" disabled={metadataBusy}>
                     <Save size={15} /> Kaydet
