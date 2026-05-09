@@ -129,7 +129,7 @@ class ManualMask:
 
 
 def default_state() -> dict[str, Any]:
-    return {"boxes": [], "manualMasks": [], "undo": [], "redo": []}
+    return {"boxes": [], "manualMasks": [], "undo": [], "redo": [], "pageMerges": {}, "hiddenPages": []}
 
 
 def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -141,6 +141,10 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
         state["manualMasks"] = []
     state.setdefault("undo", [])
     state.setdefault("redo", [])
+    if not isinstance(state.get("pageMerges"), dict):
+        state["pageMerges"] = {}
+    if not isinstance(state.get("hiddenPages"), list):
+        state["hiddenPages"] = []
     return state
 
 
@@ -164,6 +168,20 @@ def find_original_dir(episode: Path) -> Path:
     return episode / ORIGINAL_DIR_NAMES[0]
 
 
+def hidden_page_ids_from_episode(episode: Path) -> set[str]:
+    path = episode / DATA_DIR_NAME / "state.json"
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    hidden = state.get("hiddenPages")
+    if not isinstance(hidden, list):
+        return set()
+    return {str(page_id) for page_id in hidden}
+
+
 def ensure_episode_layout(project_id: str, episode_id: str) -> Path:
     episode = episode_path(project_id, episode_id)
     original = find_original_dir(episode)
@@ -172,8 +190,11 @@ def ensure_episode_layout(project_id: str, episode_id: str) -> Path:
         (episode / dirname).mkdir(parents=True, exist_ok=True)
     edited.mkdir(parents=True, exist_ok=True)
     original.mkdir(parents=True, exist_ok=True)
+    hidden_pages = hidden_page_ids_from_episode(episode)
     for image in sorted(original.iterdir(), key=lambda p: natural_key(p.name)):
         if image.suffix.lower() in ALLOWED_EXTENSIONS:
+            if image.name in hidden_pages:
+                continue
             target = edited / image.name
             if not target.exists():
                 shutil.copy2(image, target)
@@ -203,9 +224,12 @@ def list_episodes(project_id: str) -> list[dict[str, str]]:
 def page_records(project_id: str, episode_id: str) -> list[dict[str, Any]]:
     episode = ensure_episode_layout(project_id, episode_id)
     edited = episode / EDITED_DIR_NAME
+    hidden_pages = hidden_page_ids_from_episode(episode)
     records = []
     for file in sorted(edited.iterdir(), key=lambda p: natural_key(p.name)):
         if file.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
+        if file.name in hidden_pages:
             continue
         width = height = 0
         try:
@@ -367,6 +391,163 @@ def save_image_like_source(image: Image.Image, path: Path) -> None:
         image.convert("RGB").save(path, quality=95)
     else:
         image.save(path)
+
+
+def page_merge_segments(
+    state: dict[str, Any],
+    page_id: str,
+    size: tuple[int, int],
+    offset_y: int = 0,
+) -> list[dict[str, Any]]:
+    width, height = size
+    segments = (state.get("pageMerges") or {}).get(page_id)
+    if not isinstance(segments, list) or not segments:
+        return [
+            {
+                "sourcePageId": page_id,
+                "x": 0.0,
+                "y": float(offset_y),
+                "width": float(width),
+                "height": float(height),
+            }
+        ]
+
+    normalized = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        normalized.append(
+            {
+                "sourcePageId": str(segment.get("sourcePageId") or segment.get("pageId") or page_id),
+                "x": float(segment.get("x", 0)),
+                "y": float(segment.get("y", 0)) + float(offset_y),
+                "width": float(segment.get("width", width)),
+                "height": float(segment.get("height", height)),
+            }
+        )
+    return normalized or page_merge_segments({}, page_id, size, offset_y)
+
+
+def original_canvas_for_page(
+    project_id: str,
+    episode_id: str,
+    page_id: str,
+    target_size: tuple[int, int],
+    state: dict[str, Any] | None = None,
+) -> Image.Image:
+    state = state or load_state(project_id, episode_id)
+    segments = (state.get("pageMerges") or {}).get(page_id)
+    if not isinstance(segments, list) or not segments:
+        source_path = original_image_path(project_id, episode_id, page_id)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
+        with Image.open(source_path) as original_image:
+            return original_image.convert("RGBA")
+
+    canvas = Image.new("RGBA", target_size, (255, 255, 255, 255))
+    for segment in page_merge_segments(state, page_id, target_size):
+        source_id = segment["sourcePageId"]
+        source_path = original_image_path(project_id, episode_id, source_id)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
+        paste_x = int(round(float(segment.get("x", 0))))
+        paste_y = int(round(float(segment.get("y", 0))))
+        with Image.open(source_path) as source_image:
+            source = source_image.convert("RGBA")
+            left = max(0, paste_x)
+            top = max(0, paste_y)
+            right = min(canvas.width, paste_x + source.width)
+            bottom = min(canvas.height, paste_y + source.height)
+            if right > left and bottom > top:
+                crop = source.crop((left - paste_x, top - paste_y, right - paste_x, bottom - paste_y))
+                canvas.alpha_composite(crop, (left, top))
+    return canvas
+
+
+def shift_record_bbox_y(record: dict[str, Any], delta_y: int) -> None:
+    bbox = record.get("bbox")
+    if not isinstance(bbox, dict):
+        return
+    bbox["y"] = float(bbox.get("y", 0)) + float(delta_y)
+
+
+def expand_mask_canvas(path: Path, size: tuple[int, int], offset_y: int) -> None:
+    if not path.exists():
+        return
+    with Image.open(path) as mask_image:
+        mask = mask_image.convert("L")
+    expanded = Image.new("L", size, 0)
+    expanded.paste(mask, (0, offset_y))
+    expanded.save(path)
+
+
+def merge_page_with_next(project_id: str, episode_id: str, page_id: str) -> dict[str, Any]:
+    pages = page_records(project_id, episode_id)
+    page_index = next((index for index, page in enumerate(pages) if page["id"] == page_id), -1)
+    if page_index < 0:
+        raise FileNotFoundError(f"Sayfa bulunamadı: {page_id}")
+    if page_index >= len(pages) - 1:
+        raise ValueError("Bu sayfadan sonra birleştirilecek sayfa yok.")
+
+    next_page_id = pages[page_index + 1]["id"]
+    target_path = image_path(project_id, episode_id, page_id)
+    next_path = image_path(project_id, episode_id, next_page_id)
+    if not target_path.exists():
+        raise FileNotFoundError(f"Sayfa görseli bulunamadı: {target_path.name}")
+    if not next_path.exists():
+        raise FileNotFoundError(f"Sonraki sayfa görseli bulunamadı: {next_path.name}")
+
+    with Image.open(target_path) as target_image, Image.open(next_path) as next_image:
+        target = target_image.convert("RGBA")
+        next_item = next_image.convert("RGBA")
+        target_size = target.size
+        next_size = next_item.size
+        merged_size = (max(target.width, next_item.width), target.height + next_item.height)
+        merged = Image.new("RGBA", merged_size, (255, 255, 255, 255))
+        merged.alpha_composite(target, (0, 0))
+        merged.alpha_composite(next_item, (0, target.height))
+
+    state = load_state(project_id, episode_id)
+    backup_image(project_id, episode_id, page_id)
+    backup_image(project_id, episode_id, next_page_id)
+    save_image_like_source(merged, target_path)
+    next_path.unlink()
+
+    hidden_pages = state.setdefault("hiddenPages", [])
+    if next_page_id not in hidden_pages:
+        hidden_pages.append(next_page_id)
+    page_merges = state.setdefault("pageMerges", {})
+    page_merges[page_id] = [
+        *page_merge_segments(state, page_id, target_size, 0),
+        *page_merge_segments(state, next_page_id, next_size, target_size[1]),
+    ]
+    page_merges.pop(next_page_id, None)
+
+    for box in state.setdefault("boxes", []):
+        if box.get("pageId") == next_page_id:
+            box["pageId"] = page_id
+            shift_record_bbox_y(box, target_size[1])
+
+    for mask in state.setdefault("manualMasks", []):
+        mask_page_id = mask.get("pageId")
+        if mask_page_id == page_id:
+            expand_mask_canvas(manual_mask_path(project_id, episode_id, mask), merged_size, 0)
+        elif mask_page_id == next_page_id:
+            expand_mask_canvas(manual_mask_path(project_id, episode_id, mask), merged_size, target_size[1])
+            mask["pageId"] = page_id
+            shift_record_bbox_y(mask, target_size[1])
+
+    state["undo"] = []
+    state["redo"] = []
+    renumber_boxes(state)
+    save_state(project_id, episode_id, state)
+    return {
+        "pageId": page_id,
+        "mergedPageId": next_page_id,
+        "width": merged_size[0],
+        "height": merged_size[1],
+        "message": f"{page_id} ile {next_page_id} birleştirildi.",
+    }
 
 
 def begin_image_history(
@@ -559,15 +740,13 @@ def manual_mask_overlay(project_id: str, episode_id: str, mask_id: str) -> Bytes
 
 def paste_original_with_mask(project_id: str, episode_id: str, page_id: str, mask_path: Path) -> None:
     edited_path = image_path(project_id, episode_id, page_id)
-    source_path = original_image_path(project_id, episode_id, page_id)
-    if not source_path.exists():
-        raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
     if not mask_path.exists():
         raise FileNotFoundError(f"Fırça maskesi bulunamadı: {mask_path.name}")
 
-    with Image.open(edited_path) as edited_image, Image.open(source_path) as original_image, Image.open(mask_path) as mask_image:
+    state = load_state(project_id, episode_id)
+    with Image.open(edited_path) as edited_image, Image.open(mask_path) as mask_image:
         edited = edited_image.convert("RGBA")
-        original = original_image.convert("RGBA")
+        original = original_canvas_for_page(project_id, episode_id, page_id, edited.size, state)
         mask = mask_image.convert("L")
         width = min(edited.width, original.width, mask.width)
         height = min(edited.height, original.height, mask.height)
@@ -597,15 +776,12 @@ def restore_box_from_original(project_id: str, episode_id: str, box_id: str) -> 
         return None
 
     edited_path = image_path(project_id, episode_id, box["pageId"])
-    source_path = original_image_path(project_id, episode_id, box["pageId"])
-    if not source_path.exists():
-        raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
 
     history = begin_image_history(project_id, episode_id, box["pageId"], "box-restore", {"boxId": box_id})
     backup_image(project_id, episode_id, box["pageId"])
-    with Image.open(edited_path) as edited_image, Image.open(source_path) as original_image:
+    with Image.open(edited_path) as edited_image:
         edited = edited_image.convert("RGBA")
-        original = original_image.convert("RGBA")
+        original = original_canvas_for_page(project_id, episode_id, box["pageId"], edited.size, state)
         left, top, right, bottom = clamped_box(box["bbox"], min(edited.width, original.width), min(edited.height, original.height))
         restored_region = original.crop((left, top, right, bottom))
         if has_custom_box_corners(box):
@@ -628,11 +804,7 @@ def restore_manual_mask_from_original(project_id: str, episode_id: str, mask_id:
         return None
 
     page_id = mask_record["pageId"]
-    edited_path = image_path(project_id, episode_id, page_id)
-    source_path = original_image_path(project_id, episode_id, page_id)
     stored_mask_path = manual_mask_path(project_id, episode_id, mask_record)
-    if not source_path.exists():
-        raise FileNotFoundError(f"Orijinal görsel bulunamadı: {source_path.name}")
     if not stored_mask_path.exists():
         raise FileNotFoundError(f"Fırça maskesi bulunamadı: {stored_mask_path.name}")
 

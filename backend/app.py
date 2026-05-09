@@ -16,6 +16,7 @@ from .storage import (
     list_projects,
     load_state,
     manual_mask_overlay,
+    merge_page_with_next,
     page_records,
     redo_image_history,
     restore_box_from_original,
@@ -99,6 +100,25 @@ def create_app() -> Flask:
     @app.get("/api/pages")
     def pages():
         return jsonify(page_records(request.args["projectId"], request.args["episodeId"]))
+
+    @app.post("/api/pages/<path:page_id>/merge-next")
+    def merge_next_page(page_id: str):
+        payload = request.get_json(force=True)
+        project_id = payload["projectId"]
+        episode_id = payload["episodeId"]
+        try:
+            result = merge_page_with_next(project_id, episode_id, page_id)
+        except FileNotFoundError as error:
+            return {"error": str(error)}, 404
+        except ValueError as error:
+            return {"error": str(error)}, 400
+        return jsonify(
+            {
+                "pages": page_records(project_id, episode_id),
+                "state": load_state(project_id, episode_id),
+                "merge": result,
+            }
+        )
 
     @app.get("/api/pages/<path:page_id>/image")
     def page_image(page_id: str):

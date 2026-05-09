@@ -1570,6 +1570,44 @@ button:disabled {
   font-weight: 650;
 }
 
+.page-merge-panel {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  background: #12151a;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+}
+
+.merge-page-button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 11px;
+  color: var(--text);
+  background: #20262e;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-weight: 700;
+}
+
+.merge-page-button:hover:not(:disabled) {
+  border-color: rgba(215, 162, 59, 0.72);
+  background: #282620;
+}
+
+.page-merge-panel small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .panel-section-head {
   display: flex;
   align-items: center;

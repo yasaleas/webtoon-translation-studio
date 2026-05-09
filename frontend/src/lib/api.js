@@ -28,6 +28,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ projectId, episodeId }),
     }),
+  mergePageWithNext: (session, pageId) =>
+    request(`/api/pages/${encodeURIComponent(pageId)}/merge-next`, {
+      method: "POST",
+      body: JSON.stringify(session),
+    }),
   createBox: (session, pageId, bbox, style = {}) =>
     request("/api/boxes", {
       method: "POST",

@@ -213,6 +213,42 @@ function App() {
     return { pages: data.pages, boxes: ordered, manualMasks: orderedMasks };
   }
 
+  async function mergePageWithNext(pageId = activePage?.id) {
+    if (!session.projectId || !session.episodeId || !pageId) return;
+    const pageIndex = pages.findIndex((page) => page.id === pageId);
+    const page = pages[pageIndex];
+    const nextPage = pages[pageIndex + 1];
+    if (!page || !nextPage) {
+      setNotice("Bu sayfadan sonra birleştirilecek sayfa yok.");
+      return;
+    }
+    const accepted = window.confirm(
+      `${page.name} ile ${nextPage.name} tek sayfa yapılacak. İkinci sayfa listeden kaldırılır ve görsel yedeği alınır.`,
+    );
+    if (!accepted) return;
+
+    try {
+      const data = await api.mergePageWithNext(session, pageId);
+      const ordered = orderBoxesByReadingPosition(data.state.boxes || [], data.pages);
+      const orderedMasks = orderManualMasks(data.state.manualMasks || [], data.pages);
+      setPages(data.pages);
+      setBoxes(ordered);
+      setManualMasks(orderedMasks);
+      setActivePageId(pageId);
+      setActiveBoxId((current) => {
+        if (current && ordered.some((box) => box.id === current)) return current;
+        return ordered.find((box) => box.pageId === pageId)?.id || ordered[0]?.id || "";
+      });
+      setSelectedBoxIds((current) => current.filter((id) => ordered.some((box) => box.id === id)));
+      setImageVersion(Date.now());
+      setScrollTarget({ type: "page", pageId, nonce: Date.now() });
+      setNotice(data.merge?.message || "Sayfalar birleştirildi.");
+    } catch (error) {
+      setNotice(error.message);
+      await refreshState();
+    }
+  }
+
   async function runJob(type, extra = {}) {
     if (!session.projectId || !session.episodeId) return;
     const result = await api.runJob(type, session, extra);
@@ -531,6 +567,7 @@ function App() {
           pages={pages}
           activePageId={activePage?.id}
           onBackToProjects={() => setView("projects")}
+          onMergeNext={mergePageWithNext}
           onPage={(pageId) => {
             setActivePageId(pageId);
             setScrollTarget({ type: "page", pageId, nonce: Date.now() });
@@ -755,9 +792,13 @@ function ProjectHome({ projects, episodes, session, notice, onProject, onOpenEpi
   );
 }
 
-function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage }) {
+function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage, onMergeNext }) {
   const placedCount = boxes.filter((box) => box.status === "placed").length;
   const translatedCount = boxes.filter((box) => box.translatedText).length;
+  const activeIndex = pages.findIndex((page) => page.id === activePageId);
+  const activePage = pages[activeIndex];
+  const nextPage = pages[activeIndex + 1];
+  const canMergeNext = Boolean(activePage && nextPage);
   return (
     <aside className="sidebar">
       <div className="panel-head">
@@ -773,6 +814,13 @@ function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage }) {
         <Metric label="Kutu" value={boxes.length} />
         <Metric label="Çeviri" value={translatedCount} />
         <Metric label="Yerleşti" value={placedCount} />
+      </div>
+
+      <div className="page-merge-panel">
+        <button type="button" className="merge-page-button" onClick={() => onMergeNext(activePageId)} disabled={!canMergeNext}>
+          <Layers3 size={16} /> Sonrakiyle birleştir
+        </button>
+        <small>{canMergeNext ? `${activePage.name} + ${nextPage.name}` : "Aktif sayfadan sonra sayfa yok"}</small>
       </div>
 
       <div className="panel-section-head">
