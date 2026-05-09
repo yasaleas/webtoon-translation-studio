@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
@@ -28,6 +29,18 @@ from .storage import (
     update_box,
     update_manual_mask,
 )
+
+RSYNC_BASE_COMMAND = [
+    "rsync",
+    "-avz",
+    "--partial",
+    "--delay-updates",
+    "--mkpath",
+    "--protect-args",
+    "--timeout=30",
+    "-e",
+    "ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
+]
 
 
 @dataclass
@@ -349,14 +362,10 @@ def save_images(project_id: str, episode_id: str) -> dict[str, Any]:
 
 
 def sync_to_reader(project_id: str, episode_id: str) -> None:
-    settings = load_settings()
-    reader = settings.get("reader", {})
-    if not reader.get("syncEnabled"):
+    sync_config = reader_sync_config()
+    if sync_config is None:
         return
-    sync_host = reader.get("syncHost", "").strip()
-    sync_path = normalize_remote_sync_path(sync_host, reader.get("syncPath", "").strip())
-    if not sync_host or not sync_path:
-        return
+    sync_host, sync_path = sync_config
     episode_dir = PROJECTS_DIR / project_id / episode_id
     if not episode_dir.exists():
         return
@@ -367,19 +376,64 @@ def sync_to_reader(project_id: str, episode_id: str) -> None:
         return
 
     dest = f"{sync_host}:{sync_path}/{project_id}/{episode_id}/"
+    run_reader_rsync([*RSYNC_BASE_COMMAND, f"{edited_dir}/", dest], f"{project_id}/{episode_id}")
+    sync_project_metadata_to_reader(project_id, sync_config)
+
+
+def sync_project_metadata_to_reader(project_id: str, sync_config: tuple[str, str] | None = None) -> None:
+    config = sync_config if sync_config is not None else reader_sync_config()
+    if config is None:
+        return
+    sync_host, sync_path = config
+    project_dir = PROJECTS_DIR / project_id
+    if not project_dir.exists():
+        return
+    sources: list[str] = []
+    metadata_file = project_dir / "project.json"
+    if metadata_file.exists():
+        sources.append(str(metadata_file))
+    sources.extend(str(path) for path in sorted(project_dir.glob(".project-cover.*")) if path.is_file())
+    if not sources:
+        return
+    dest = f"{sync_host}:{sync_path}/{project_id}/"
+    run_reader_rsync([*RSYNC_BASE_COMMAND, *sources, dest], f"{project_id}/metadata")
+
+
+def clear_project_metadata_from_reader(project_id: str) -> None:
+    config = reader_sync_config()
+    if config is None:
+        return
+    sync_host, sync_path = config
+    remote_project = f"{sync_path.rstrip('/')}/{project_id}"
     command = [
-        "rsync",
-        "-avz",
-        "--partial",
-        "--delay-updates",
-        "--mkpath",
-        "--protect-args",
-        "--timeout=30",
-        "-e",
-        "ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
-        f"{edited_dir}/",
-        dest,
+        "ssh",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+        sync_host,
+        f"rm -f -- {shlex.quote(remote_project + '/project.json')} {shlex.quote(remote_project)}/.project-cover.*",
     ]
+    run_reader_command(command, f"{project_id}/metadata-clear")
+
+
+def reader_sync_config() -> tuple[str, str] | None:
+    settings = load_settings()
+    reader = settings.get("reader", {})
+    if not reader.get("syncEnabled"):
+        return None
+    sync_host = reader.get("syncHost", "").strip()
+    sync_path = normalize_remote_sync_path(sync_host, reader.get("syncPath", "").strip())
+    if not sync_host or not sync_path:
+        return None
+    return sync_host, sync_path
+
+
+def run_reader_rsync(command: list[str], label: str) -> None:
+    run_reader_command(command, label)
+
+
+def run_reader_command(command: list[str], label: str) -> None:
     last_detail = ""
     for attempt in range(1, 4):
         try:
@@ -395,15 +449,14 @@ def sync_to_reader(project_id: str, episode_id: str) -> None:
         except Exception as error:
             last_detail = str(error)
         logging.getLogger(__name__).warning(
-            "Reader sync failed for %s/%s on attempt %s: %s",
-            project_id,
-            episode_id,
+            "Reader sync failed for %s on attempt %s: %s",
+            label,
             attempt,
             last_detail,
         )
         if attempt < 3:
             time.sleep(2 * attempt)
-    raise RuntimeError(f"Reader sync failed for {project_id}/{episode_id}: {last_detail}")
+    raise RuntimeError(f"Reader sync failed for {label}: {last_detail}")
 
 
 def normalize_remote_sync_path(sync_host: str, sync_path: str) -> str:

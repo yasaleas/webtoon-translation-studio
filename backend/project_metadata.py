@@ -593,13 +593,10 @@ def best_mangadex_cover_url(manga: dict[str, Any]) -> str:
 
 
 def download_cover(url: str) -> tuple[bytes, str]:
+    normalized_url = normalize_remote_url(url)
     request = Request(
-        normalize_remote_url(url),
-        headers={
-            "User-Agent": IMAGE_USER_AGENT,
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Referer": "https://www.webtoons.com/",
-        },
+        normalized_url,
+        headers=cover_request_headers(normalized_url),
     )
     try:
         with urlopen(request, timeout=25) as response:
@@ -612,6 +609,19 @@ def download_cover(url: str) -> tuple[bytes, str]:
     if len(content) > MAX_COVER_BYTES:
         raise RuntimeError("Kapak görseli çok büyük.")
     return content, content_type
+
+
+def cover_request_headers(url: str) -> dict[str, str]:
+    headers = {
+        "User-Agent": IMAGE_USER_AGENT,
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    }
+    host = urlsplit(url).netloc.lower()
+    if host.endswith("mangadex.org"):
+        headers["Referer"] = "https://mangadex.org/"
+    elif "webtoon" in host or host.endswith("pstatic.net"):
+        headers["Referer"] = "https://www.webtoons.com/"
+    return headers
 
 
 def normalize_remote_url(url: str) -> str:

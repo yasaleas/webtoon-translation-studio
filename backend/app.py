@@ -38,6 +38,20 @@ def create_app() -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("WEBTOON_MAX_UPLOAD_MB", "25")) * 1024 * 1024
     CORS(app, resources={r"/api/*": {"origins": cors_origins()}})
 
+    def with_reader_metadata_sync(project_id: str, metadata: dict):
+        try:
+            jobs.sync_project_metadata_to_reader(project_id)
+        except RuntimeError as error:
+            metadata["readerSyncError"] = str(error)
+        return metadata
+
+    def with_reader_metadata_clear(project_id: str, metadata: dict):
+        try:
+            jobs.clear_project_metadata_from_reader(project_id)
+        except RuntimeError as error:
+            metadata["readerSyncError"] = str(error)
+        return metadata
+
     @app.errorhandler(ValueError)
     def bad_request(error: ValueError):
         return {"error": str(error)}, 400
@@ -110,7 +124,7 @@ def create_app() -> Flask:
         if cover is None or not cover.filename:
             return {"error": "cover not found"}, 400
         try:
-            return jsonify(save_project_cover(project_id, cover.read(), cover.filename, cover.content_type or ""))
+            return jsonify(with_reader_metadata_sync(project_id, save_project_cover(project_id, cover.read(), cover.filename, cover.content_type or "")))
         except ValueError as error:
             return {"error": str(error)}, 400
 
@@ -120,22 +134,25 @@ def create_app() -> Flask:
 
     @app.put("/api/projects/<project_id>/metadata")
     def update_project_metadata(project_id: str):
-        return jsonify(save_project_metadata(project_id, request.get_json(force=True)))
+        return jsonify(with_reader_metadata_sync(project_id, save_project_metadata(project_id, request.get_json(force=True))))
 
     @app.delete("/api/projects/<project_id>/metadata")
     def delete_project_metadata(project_id: str):
-        return jsonify(clear_project_metadata(project_id))
+        return jsonify(with_reader_metadata_clear(project_id, clear_project_metadata(project_id)))
 
     @app.post("/api/projects/<project_id>/metadata/fetch")
     def fetch_project_metadata(project_id: str):
         payload = request.get_json(silent=True) or {}
         try:
             return jsonify(
-                fetch_and_store_project_metadata(
+                with_reader_metadata_sync(
                     project_id,
-                    query=payload.get("query"),
-                    provider=payload.get("provider", "anilist"),
-                    source_id=payload.get("sourceId"),
+                    fetch_and_store_project_metadata(
+                        project_id,
+                        query=payload.get("query"),
+                        provider=payload.get("provider", "anilist"),
+                        source_id=payload.get("sourceId"),
+                    ),
                 )
             )
         except RuntimeError as error:
