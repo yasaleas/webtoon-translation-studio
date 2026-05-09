@@ -6,6 +6,7 @@ from flask_cors import CORS
 
 from . import jobs
 from .fonts import font_path, list_fonts, upload_font
+from .project_metadata import fetch_and_store_project_metadata
 from .settings import public_settings, save_settings
 from .storage import (
     add_box,
@@ -15,12 +16,15 @@ from .storage import (
     list_episodes,
     list_projects,
     load_state,
+    load_project_metadata,
     manual_mask_overlay,
     merge_page_with_next,
     page_records,
+    project_cover_path,
     redo_image_history,
     restore_box_from_original,
     restore_manual_mask_from_original,
+    save_project_metadata,
     undo_image_history,
     update_box,
 )
@@ -78,6 +82,37 @@ def create_app() -> Flask:
     @app.get("/api/projects")
     def projects():
         return jsonify(list_projects())
+
+    @app.get("/api/projects/<project_id>/cover")
+    def project_cover(project_id: str):
+        path = project_cover_path(project_id)
+        if path is None:
+            return {"error": "cover not found"}, 404
+        return send_file(path)
+
+    @app.get("/api/projects/<project_id>/metadata")
+    def project_metadata(project_id: str):
+        return jsonify(load_project_metadata(project_id))
+
+    @app.put("/api/projects/<project_id>/metadata")
+    def update_project_metadata(project_id: str):
+        return jsonify(save_project_metadata(project_id, request.get_json(force=True)))
+
+    @app.post("/api/projects/<project_id>/metadata/fetch")
+    def fetch_project_metadata(project_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(
+                fetch_and_store_project_metadata(
+                    project_id,
+                    query=payload.get("query"),
+                    provider=payload.get("provider", "anilist"),
+                )
+            )
+        except RuntimeError as error:
+            return {"error": str(error)}, 502
+        except ValueError as error:
+            return {"error": str(error)}, 400
 
     @app.get("/api/projects/<project_id>/episodes")
     def episodes(project_id: str):

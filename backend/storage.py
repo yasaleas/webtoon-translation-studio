@@ -32,6 +32,8 @@ STATE_LOCK = RLock()
 MANUAL_MASK_DIR_NAME = "manual_masks"
 HISTORY_DIR_NAME = "history"
 NEAREST_RESAMPLE = getattr(Image, "Resampling", Image).NEAREST
+PROJECT_METADATA_FILE_NAME = "project.json"
+PROJECT_COVER_STEM = ".project-cover"
 
 
 def natural_key(value: str) -> list[Any]:
@@ -201,13 +203,138 @@ def ensure_episode_layout(project_id: str, episode_id: str) -> Path:
     return episode
 
 
-def list_projects() -> list[dict[str, str]]:
+def project_metadata_file(project_id: str) -> Path:
+    return project_path(project_id) / PROJECT_METADATA_FILE_NAME
+
+
+def default_project_metadata(project_id: str) -> dict[str, Any]:
+    return {
+        "title": project_id,
+        "originalTitle": "",
+        "author": "",
+        "artist": "",
+        "status": "",
+        "year": "",
+        "description": "",
+        "genres": [],
+        "tags": [],
+        "coverFile": "",
+        "coverSourceUrl": "",
+        "source": {},
+        "updatedAt": "",
+    }
+
+
+def normalize_project_metadata(project_id: str, metadata: dict[str, Any] | None) -> dict[str, Any]:
+    base = default_project_metadata(project_id)
+    if not isinstance(metadata, dict):
+        return base
+    for key in ("title", "originalTitle", "author", "artist", "status", "year", "description", "coverFile", "coverSourceUrl", "updatedAt"):
+        value = metadata.get(key)
+        if value is not None:
+            base[key] = str(value).strip()
+    for key in ("genres", "tags"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            base[key] = [str(item).strip() for item in value if str(item).strip()][:12]
+    source = metadata.get("source")
+    base["source"] = source if isinstance(source, dict) else {}
+    if not base["title"]:
+        base["title"] = project_id
+    return base
+
+
+def load_project_metadata(project_id: str) -> dict[str, Any]:
+    path = project_metadata_file(project_id)
+    if not path.exists() or path.stat().st_size == 0:
+        return default_project_metadata(project_id)
+    try:
+        return normalize_project_metadata(project_id, json.loads(path.read_text(encoding="utf-8")))
+    except json.JSONDecodeError:
+        corrupt = path.with_suffix(f".corrupt-{uuid4().hex}.json")
+        shutil.copy2(path, corrupt)
+        return default_project_metadata(project_id)
+
+
+def save_project_metadata(project_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    path = project_metadata_file(project_id)
+    existing = load_project_metadata(project_id)
+    merged = normalize_project_metadata(project_id, {**existing, **(metadata or {})})
+    merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f".{uuid4().hex}.tmp")
+    temp_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+    return merged
+
+
+def project_cover_path(project_id: str) -> Path | None:
+    root = project_path(project_id)
+    metadata = load_project_metadata(project_id)
+    cover_file = metadata.get("coverFile")
+    if cover_file:
+        try:
+            candidate = root / safe_path_part(cover_file, "kapak görseli")
+        except ValueError:
+            candidate = None
+        if candidate and candidate.suffix.lower() in ALLOWED_EXTENSIONS and candidate.exists():
+            return candidate
+    for candidate in sorted(root.glob(f"{PROJECT_COVER_STEM}.*"), key=lambda p: natural_key(p.name)):
+        if candidate.suffix.lower() in ALLOWED_EXTENSIONS and candidate.exists():
+            return candidate
+    return None
+
+
+def save_project_cover(project_id: str, content: bytes, source_url: str = "", content_type: str = "") -> dict[str, Any]:
+    if not content:
+        raise ValueError("Kapak görseli boş.")
+    root = project_path(project_id)
+    suffix = cover_suffix_from_source(source_url, content_type)
+    filename = f"{PROJECT_COVER_STEM}{suffix}"
+    for old_cover in root.glob(f"{PROJECT_COVER_STEM}.*"):
+        if old_cover.name != filename and old_cover.is_file():
+            old_cover.unlink()
+    path = root / filename
+    path.write_bytes(content)
+    metadata = load_project_metadata(project_id)
+    metadata["coverFile"] = filename
+    metadata["coverSourceUrl"] = source_url
+    return save_project_metadata(project_id, metadata)
+
+
+def cover_suffix_from_source(source_url: str, content_type: str) -> str:
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    if normalized_type in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    if normalized_type == "image/png":
+        return ".png"
+    if normalized_type == "image/webp":
+        return ".webp"
+    suffix = Path(source_url.split("?", 1)[0]).suffix.lower()
+    if suffix in ALLOWED_EXTENSIONS:
+        return suffix
+    return ".jpg"
+
+
+def list_projects() -> list[dict[str, Any]]:
     ensure_dirs()
-    return [
-        {"id": item.name, "name": item.name}
-        for item in sorted(PROJECTS_DIR.iterdir(), key=lambda p: natural_key(p.name))
-        if item.is_dir()
-    ]
+    records = []
+    for item in sorted(PROJECTS_DIR.iterdir(), key=lambda p: natural_key(p.name)):
+        if not item.is_dir():
+            continue
+        metadata = load_project_metadata(item.name)
+        episode_count = sum(1 for child in item.iterdir() if child.is_dir())
+        records.append(
+            {
+                "id": item.name,
+                "name": metadata.get("title") or item.name,
+                "folderName": item.name,
+                "episodeCount": episode_count,
+                "hasCover": project_cover_path(item.name) is not None,
+                "metadata": metadata,
+            }
+        )
+    return records
 
 
 def list_episodes(project_id: str) -> list[dict[str, str]]:

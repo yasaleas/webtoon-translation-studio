@@ -110,9 +110,10 @@ function App() {
   const [settings, setSettings] = useState(null);
   const [view, setView] = useState("projects");
   const [warpEditBoxId, setWarpEditBoxId] = useState("");
+  const [metadataBusyProjectId, setMetadataBusyProjectId] = useState("");
 
   useEffect(() => {
-    api.projects().then(setProjects).catch((error) => setNotice(error.message));
+    loadProjects().catch((error) => setNotice(error.message));
     api.settings().then((data) => {
       setSettings(data);
       if (data.editor?.defaultFontFamily) setDefaultFont(data.editor.defaultFontFamily);
@@ -183,6 +184,42 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [session.projectId, session.episodeId]);
+
+  async function loadProjects() {
+    const items = await api.projects();
+    setProjects(items);
+    return items;
+  }
+
+  async function fetchProjectMetadata(projectId, query) {
+    if (!projectId) return;
+    setMetadataBusyProjectId(projectId);
+    try {
+      const saved = await api.fetchProjectMetadata(projectId, query);
+      await loadProjects();
+      setNotice(`${saved.title || projectId} bilgileri kaydedildi.`);
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    } finally {
+      setMetadataBusyProjectId("");
+    }
+  }
+
+  async function saveProjectMetadata(projectId, metadata) {
+    if (!projectId) return;
+    setMetadataBusyProjectId(projectId);
+    try {
+      const saved = await api.saveProjectMetadata(projectId, metadata);
+      await loadProjects();
+      setNotice(`${saved.title || projectId} bilgileri kaydedildi.`);
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    } finally {
+      setMetadataBusyProjectId("");
+    }
+  }
 
   async function openSession(projectId = session.projectId, episodeId = session.episodeId) {
     if (!projectId || !episodeId) return;
@@ -488,12 +525,15 @@ function App() {
           episodes={episodes}
           session={session}
           notice={notice}
+          metadataBusyProjectId={metadataBusyProjectId}
           onProject={(projectId) => setSession({ projectId, episodeId: "" })}
           onOpenEpisode={(episodeId) => {
             const next = { ...session, episodeId };
             setSession(next);
             openSession(next.projectId, next.episodeId).catch((error) => setNotice(error.message));
           }}
+          onFetchMetadata={fetchProjectMetadata}
+          onSaveMetadata={saveProjectMetadata}
           onOpenSettings={() => setView("settings")}
         />
       </div>
@@ -708,36 +748,66 @@ function SessionSummary({ project, episode, stats }) {
   );
 }
 
-function ProjectHome({ projects, episodes, session, notice, onProject, onOpenEpisode, onOpenSettings }) {
+function ProjectHome({
+  projects,
+  episodes,
+  session,
+  notice,
+  metadataBusyProjectId,
+  onProject,
+  onOpenEpisode,
+  onFetchMetadata,
+  onSaveMetadata,
+  onOpenSettings,
+}) {
   const activeProject = projects.find((project) => project.id === session.projectId);
+  const activeMetadata = activeProject?.metadata || {};
+  const [lookupQuery, setLookupQuery] = useState("");
+  const [metadataDraft, setMetadataDraft] = useState(projectMetadataDraft(activeProject));
+  const metadataBusy = metadataBusyProjectId === activeProject?.id;
+
+  useEffect(() => {
+    setLookupQuery(activeMetadata.title || activeProject?.folderName || activeProject?.name || "");
+    setMetadataDraft(projectMetadataDraft(activeProject));
+  }, [activeProject?.id, activeMetadata.updatedAt]);
+
   return (
     <main className="project-page">
       <section className="project-hero">
         <div>
-          <span className="panel-kicker">Başlangıç</span>
-          <h1>Çalışacağın bölümü seç</h1>
-          <p>Projeler ve bölümler burada ayrılır; editör sadece açık bölümün çizim, OCR, çeviri ve yerleştirme işlerine odaklanır.</p>
+          <span className="panel-kicker">Kütüphane</span>
+          <h1>Projeler</h1>
+          <p>Kapak, yazar bilgisi ve bölümler aynı ekranda; editöre geçmeden önce çalışacağın seriyi seç.</p>
         </div>
         <button type="button" className="ghost" onClick={onOpenSettings}><Settings size={16} /> Ayarlar</button>
       </section>
       {notice ? <div className="notice project-notice">{notice}</div> : null}
       <section className="project-layout">
-        <aside className="project-list-panel">
-          <div className="panel-section-head">
-            <span>Projeler</span>
-            <small>{projects.length || "Boş"}</small>
+        <section className="project-library-panel">
+          <div className="panel-head">
+            <div>
+              <span className="panel-kicker">Seriler</span>
+              <h2>Proje Kütüphanesi</h2>
+            </div>
+            <span className="count-badge">{projects.length}</span>
           </div>
-          <div className="project-list">
+          <div className="project-grid">
             {projects.length ? projects.map((project) => (
               <button
                 key={project.id}
                 type="button"
-                className={project.id === session.projectId ? "project-row active" : "project-row"}
+                className={project.id === session.projectId ? "project-card active" : "project-card"}
                 onClick={() => onProject(project.id)}
               >
-                <FolderOpen size={17} />
-                <span>{project.name}</span>
-                <ChevronRight size={15} />
+                <ProjectCover project={project} />
+                <span className="project-card-body">
+                  <strong>{project.metadata?.title || project.name}</strong>
+                  <small>{project.metadata?.author || project.folderName || project.id}</small>
+                  <span className="project-card-meta">
+                    <span>{project.episodeCount || 0} bölüm</span>
+                    {project.metadata?.status ? <span>{project.metadata.status}</span> : null}
+                  </span>
+                </span>
               </button>
             )) : (
               <div className="side-empty">
@@ -745,51 +815,146 @@ function ProjectHome({ projects, episodes, session, notice, onProject, onOpenEpi
               </div>
             )}
           </div>
-        </aside>
+        </section>
 
-        <section className="episode-panel">
+        <aside className="project-detail-panel">
           <div className="panel-head">
             <div>
-              <span className="panel-kicker">Bölümler</span>
-              <h2>{activeProject?.name || "Proje seç"}</h2>
+              <span className="panel-kicker">Seçili Proje</span>
+              <h2>{activeProject?.metadata?.title || activeProject?.name || "Proje seç"}</h2>
             </div>
-            <span className="count-badge">{episodes.length}</span>
+            {activeProject ? <span className="count-badge">{episodes.length}</span> : null}
           </div>
           {activeProject ? (
-            <div className="episode-grid">
-              {episodes.length ? episodes.map((episode) => (
-                <button
-                  key={episode.id}
-                  type="button"
-                  className="episode-card"
-                  onClick={() => onOpenEpisode(episode.id)}
-                >
-                  <span className="episode-icon"><FileImage size={18} /></span>
-                  <span>
-                    <strong>{episode.name}</strong>
-                    <small>Editörde aç</small>
-                  </span>
-                  <ChevronRight size={16} />
-                </button>
-              )) : (
-                <div className="empty-panel">
-                  <CircleAlert size={22} />
-                  <h2>Bölüm bulunamadı</h2>
-                  <p>Bu proje altında bölüm klasörü varsa backend yeniden tarandığında burada görünür.</p>
+            <>
+              <div className="project-detail-head">
+                <ProjectCover project={activeProject} large />
+                <div>
+                  <strong>{activeMetadata.title || activeProject.name}</strong>
+                  <small>{[activeMetadata.author, activeMetadata.artist].filter(Boolean).join(" / ") || activeProject.folderName}</small>
+                  <div className="project-tags">
+                    {activeMetadata.year ? <span>{activeMetadata.year}</span> : null}
+                    {activeMetadata.status ? <span>{activeMetadata.status}</span> : null}
+                    {(activeMetadata.genres || []).slice(0, 3).map((genre) => <span key={genre}>{genre}</span>)}
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
+
+              <form
+                className="metadata-box"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSaveMetadata(activeProject.id, metadataDraft).catch(() => {});
+                }}
+              >
+                <label>
+                  Başlık
+                  <input value={metadataDraft.title} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, title: event.target.value }))} />
+                </label>
+                <div className="metadata-fields">
+                  <label>
+                    Yazar
+                    <input value={metadataDraft.author} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, author: event.target.value }))} />
+                  </label>
+                  <label>
+                    Çizer
+                    <input value={metadataDraft.artist} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, artist: event.target.value }))} />
+                  </label>
+                  <label>
+                    Durum
+                    <input value={metadataDraft.status} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, status: event.target.value }))} />
+                  </label>
+                  <label>
+                    Yıl
+                    <input value={metadataDraft.year} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, year: event.target.value }))} />
+                  </label>
+                </div>
+                <label>
+                  Açıklama
+                  <textarea value={metadataDraft.description} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, description: event.target.value }))} />
+                </label>
+                <div className="metadata-actions">
+                  <input value={lookupQuery} onChange={(event) => setLookupQuery(event.target.value)} placeholder="AniList araması" />
+                  <button type="button" className="ghost" disabled={metadataBusy} onClick={() => onFetchMetadata(activeProject.id, lookupQuery).catch(() => {})}>
+                    <Search size={15} /> {metadataBusy ? "Aranıyor" : "AniList"}
+                  </button>
+                  <button type="submit" className="ghost" disabled={metadataBusy}>
+                    <Save size={15} /> Kaydet
+                  </button>
+                </div>
+              </form>
+
+              <div className="panel-section-head">
+                <span>Bölümler</span>
+                <small>{episodes.length || "Boş"}</small>
+              </div>
+              <div className="episode-grid compact">
+                {episodes.length ? episodes.map((episode) => (
+                  <button
+                    key={episode.id}
+                    type="button"
+                    className="episode-card"
+                    onClick={() => onOpenEpisode(episode.id)}
+                  >
+                    <span className="episode-icon"><FileImage size={18} /></span>
+                    <span>
+                      <strong>{episode.name}</strong>
+                      <small>Editörde aç</small>
+                    </span>
+                    <ChevronRight size={16} />
+                  </button>
+                )) : (
+                  <div className="empty-panel">
+                    <CircleAlert size={22} />
+                    <h2>Bölüm bulunamadı</h2>
+                    <p>Bu proje altında bölüm klasörü varsa backend yeniden tarandığında burada görünür.</p>
+                  </div>
+                )}
+              </div>
+            </>
           ) : (
             <div className="empty-panel">
               <FolderOpen size={24} />
-              <h2>Önce proje seç</h2>
-              <p>Sol listeden bir proje seçtiğinde bölümleri burada açabilirsin.</p>
+              <h2>Proje seç</h2>
+              <p>Kütüphaneden bir seri seçildiğinde metadata ve bölümler burada görünür.</p>
             </div>
           )}
-        </section>
+        </aside>
       </section>
     </main>
   );
+}
+
+function ProjectCover({ project, large = false }) {
+  const version = project?.metadata?.updatedAt || project?.metadata?.coverFile || "";
+  const hasCover = Boolean(project?.hasCover);
+  return (
+    <span className={large ? "project-cover large" : "project-cover"}>
+      <span className="project-cover-fallback"><FileImage size={large ? 28 : 20} /></span>
+      {hasCover ? (
+        <img
+          src={api.projectCoverUrl(project.id, version)}
+          alt={project.metadata?.title || project.name}
+          loading="lazy"
+          onError={(event) => {
+            event.currentTarget.remove();
+          }}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function projectMetadataDraft(project) {
+  const metadata = project?.metadata || {};
+  return {
+    title: metadata.title || project?.name || "",
+    author: metadata.author || "",
+    artist: metadata.artist || "",
+    status: metadata.status || "",
+    year: metadata.year || "",
+    description: metadata.description || "",
+  };
 }
 
 function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage, onMergeNext }) {

@@ -21,8 +21,22 @@ export const api = {
     const params = new URLSearchParams({ projectId, episodeId });
     return `${API_BASE}/api/manual-masks/${encodeURIComponent(maskId)}/overlay?${params}`;
   },
+  projectCoverUrl(projectId, version = "") {
+    const suffix = version ? `?v=${encodeURIComponent(version)}` : "";
+    return `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/cover${suffix}`;
+  },
   projects: () => request("/api/projects"),
   episodes: (projectId) => request(`/api/projects/${encodeURIComponent(projectId)}/episodes`),
+  fetchProjectMetadata: (projectId, query) =>
+    request(`/api/projects/${encodeURIComponent(projectId)}/metadata/fetch`, {
+      method: "POST",
+      body: JSON.stringify({ query, provider: "anilist" }),
+    }),
+  saveProjectMetadata: (projectId, metadata) =>
+    request(`/api/projects/${encodeURIComponent(projectId)}/metadata`, {
+      method: "PUT",
+      body: JSON.stringify(metadata),
+    }),
   openSession: (projectId, episodeId) =>
     request("/api/session/open", {
       method: "POST",
