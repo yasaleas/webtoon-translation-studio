@@ -25,6 +25,10 @@ export const api = {
     const suffix = version ? `?v=${encodeURIComponent(version)}` : "";
     return `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/cover${suffix}`;
   },
+  metadataCoverPreviewUrl(url) {
+    const params = new URLSearchParams({ url });
+    return `${API_BASE}/api/metadata/cover-preview?${params}`;
+  },
   projects: () => request("/api/projects"),
   episodes: (projectId) => request(`/api/projects/${encodeURIComponent(projectId)}/episodes`),
   searchProjectMetadata: (projectId, query) =>

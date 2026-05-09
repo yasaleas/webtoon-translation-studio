@@ -1070,7 +1070,7 @@ function MetadataCandidate({ candidate, busy, onSelect }) {
   return (
     <div className="metadata-candidate">
       <span className="candidate-cover">
-        {candidate.coverUrl ? <img src={candidate.coverUrl} alt={candidate.title} loading="lazy" /> : <FileImage size={18} />}
+        {candidate.coverUrl ? <img src={api.metadataCoverPreviewUrl(candidate.coverUrl)} alt={candidate.title} loading="lazy" /> : <FileImage size={18} />}
       </span>
       <div>
         <div className="candidate-title">

@@ -6,7 +6,7 @@ from difflib import SequenceMatcher
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, unquote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .storage import load_project_metadata, save_project_cover, save_project_metadata
@@ -17,6 +17,7 @@ MANGADEX_COVER_BASE = "https://uploads.mangadex.org/covers"
 WEBTOON_SEARCH_URL = "https://www.webtoons.com/en/search"
 MAX_COVER_BYTES = 12 * 1024 * 1024
 USER_AGENT = "WebtoonTranslationStudio/1.0"
+IMAGE_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 ANILIST_MEDIA_FIELDS = """
 id
@@ -592,7 +593,14 @@ def best_mangadex_cover_url(manga: dict[str, Any]) -> str:
 
 
 def download_cover(url: str) -> tuple[bytes, str]:
-    request = Request(url, headers={"User-Agent": USER_AGENT})
+    request = Request(
+        normalize_remote_url(url),
+        headers={
+            "User-Agent": IMAGE_USER_AGENT,
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Referer": "https://www.webtoons.com/",
+        },
+    )
     try:
         with urlopen(request, timeout=25) as response:
             content_type = response.headers.get("Content-Type", "")
@@ -604,6 +612,15 @@ def download_cover(url: str) -> tuple[bytes, str]:
     if len(content) > MAX_COVER_BYTES:
         raise RuntimeError("Kapak görseli çok büyük.")
     return content, content_type
+
+
+def normalize_remote_url(url: str) -> str:
+    parts = urlsplit(html.unescape(str(url or "").strip()))
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise RuntimeError("Kapak görseli adresi geçersiz.")
+    path = quote(unquote(parts.path), safe="/%")
+    query = quote(unquote(parts.query), safe="=&%/:+,.?-")
+    return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 def clean_description(value: str) -> str:

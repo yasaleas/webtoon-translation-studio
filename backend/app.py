@@ -1,4 +1,5 @@
 from pathlib import Path
+from io import BytesIO
 import os
 
 from flask import Flask, jsonify, request, send_file
@@ -6,7 +7,7 @@ from flask_cors import CORS
 
 from . import jobs
 from .fonts import font_path, list_fonts, upload_font
-from .project_metadata import fetch_and_store_project_metadata, search_project_metadata
+from .project_metadata import download_cover, fetch_and_store_project_metadata, search_project_metadata
 from .settings import public_settings, save_settings
 from .storage import (
     add_box,
@@ -91,6 +92,17 @@ def create_app() -> Flask:
         if path is None:
             return {"error": "cover not found"}, 404
         return send_file(path)
+
+    @app.get("/api/metadata/cover-preview")
+    def metadata_cover_preview():
+        url = request.args.get("url", "")
+        if not url:
+            return {"error": "cover url required"}, 400
+        try:
+            content, content_type = download_cover(url)
+        except RuntimeError as error:
+            return {"error": str(error)}, 502
+        return send_file(BytesIO(content), mimetype=content_type or "image/jpeg")
 
     @app.post("/api/projects/<project_id>/cover/upload")
     def upload_project_cover(project_id: str):
