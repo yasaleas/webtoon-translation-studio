@@ -111,6 +111,7 @@ function App() {
   const [view, setView] = useState("projects");
   const [warpEditBoxId, setWarpEditBoxId] = useState("");
   const [metadataBusyProjectId, setMetadataBusyProjectId] = useState("");
+  const [metadataCandidates, setMetadataCandidates] = useState({ projectId: "", items: [], errors: [] });
 
   useEffect(() => {
     loadProjects().catch((error) => setNotice(error.message));
@@ -191,12 +192,33 @@ function App() {
     return items;
   }
 
-  async function fetchProjectMetadata(projectId, query) {
+  async function searchProjectMetadata(projectId, query) {
     if (!projectId) return;
     setMetadataBusyProjectId(projectId);
     try {
-      const saved = await api.fetchProjectMetadata(projectId, query);
+      const results = await api.searchProjectMetadata(projectId, query);
+      setMetadataCandidates({ projectId, items: results.candidates || [], errors: results.errors || [] });
+      const count = results.candidates?.length || 0;
+      setNotice(count ? `${count} metadata adayı bulundu. Doğru sonucu seçerek kaydet.` : "Uygun metadata adayı bulunamadı.");
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    } finally {
+      setMetadataBusyProjectId("");
+    }
+  }
+
+  async function fetchProjectMetadata(projectId, candidate) {
+    if (!projectId || !candidate) return;
+    setMetadataBusyProjectId(projectId);
+    try {
+      const saved = await api.fetchProjectMetadata(projectId, {
+        provider: candidate.provider,
+        sourceId: candidate.sourceId,
+        query: candidate.title,
+      });
       await loadProjects();
+      setMetadataCandidates({ projectId: "", items: [], errors: [] });
       setNotice(`${saved.title || projectId} bilgileri kaydedildi.`);
     } catch (error) {
       setNotice(error.message);
@@ -526,12 +548,18 @@ function App() {
           session={session}
           notice={notice}
           metadataBusyProjectId={metadataBusyProjectId}
-          onProject={(projectId) => setSession({ projectId, episodeId: "" })}
+          metadataCandidates={metadataCandidates.projectId === session.projectId ? metadataCandidates.items : []}
+          metadataErrors={metadataCandidates.projectId === session.projectId ? metadataCandidates.errors : []}
+          onProject={(projectId) => {
+            setSession({ projectId, episodeId: "" });
+            setMetadataCandidates({ projectId: "", items: [], errors: [] });
+          }}
           onOpenEpisode={(episodeId) => {
             const next = { ...session, episodeId };
             setSession(next);
             openSession(next.projectId, next.episodeId).catch((error) => setNotice(error.message));
           }}
+          onSearchMetadata={searchProjectMetadata}
           onFetchMetadata={fetchProjectMetadata}
           onSaveMetadata={saveProjectMetadata}
           onOpenSettings={() => setView("settings")}
@@ -754,8 +782,11 @@ function ProjectHome({
   session,
   notice,
   metadataBusyProjectId,
+  metadataCandidates,
+  metadataErrors,
   onProject,
   onOpenEpisode,
+  onSearchMetadata,
   onFetchMetadata,
   onSaveMetadata,
   onOpenSettings,
@@ -844,12 +875,16 @@ function ProjectHome({
                 className="metadata-box"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  onSaveMetadata(activeProject.id, metadataDraft).catch(() => {});
+                  onSaveMetadata(activeProject.id, projectMetadataPayload(metadataDraft)).catch(() => {});
                 }}
               >
                 <label>
                   Başlık
                   <input value={metadataDraft.title} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, title: event.target.value }))} />
+                </label>
+                <label>
+                  Orijinal ad
+                  <input value={metadataDraft.originalTitle} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, originalTitle: event.target.value }))} />
                 </label>
                 <div className="metadata-fields">
                   <label>
@@ -873,16 +908,44 @@ function ProjectHome({
                   Açıklama
                   <textarea value={metadataDraft.description} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, description: event.target.value }))} />
                 </label>
+                <label>
+                  Alternatif adlar
+                  <textarea value={metadataDraft.synonyms} onChange={(event) => setMetadataDraft((draft) => ({ ...draft, synonyms: event.target.value }))} />
+                </label>
                 <div className="metadata-actions">
-                  <input value={lookupQuery} onChange={(event) => setLookupQuery(event.target.value)} placeholder="AniList araması" />
-                  <button type="button" className="ghost" disabled={metadataBusy} onClick={() => onFetchMetadata(activeProject.id, lookupQuery).catch(() => {})}>
-                    <Search size={15} /> {metadataBusy ? "Aranıyor" : "AniList"}
+                  <input value={lookupQuery} onChange={(event) => setLookupQuery(event.target.value)} placeholder="MangaDex + AniList araması" />
+                  <button type="button" className="ghost" disabled={metadataBusy} onClick={() => onSearchMetadata(activeProject.id, lookupQuery).catch(() => {})}>
+                    <Search size={15} /> {metadataBusy ? "Aranıyor" : "Ara"}
                   </button>
                   <button type="submit" className="ghost" disabled={metadataBusy}>
                     <Save size={15} /> Kaydet
                   </button>
                 </div>
               </form>
+
+              {metadataCandidates.length || metadataErrors.length ? (
+                <div className="metadata-candidates">
+                  {metadataCandidates.length ? (
+                    <>
+                      <div className="panel-section-head">
+                        <span>Metadata adayları</span>
+                        <small>{metadataCandidates.length}</small>
+                      </div>
+                      {metadataCandidates.map((candidate) => (
+                        <MetadataCandidate
+                          key={`${candidate.provider}-${candidate.sourceId}`}
+                          candidate={candidate}
+                          busy={metadataBusy}
+                          onSelect={() => onFetchMetadata(activeProject.id, candidate).catch(() => {})}
+                        />
+                      ))}
+                    </>
+                  ) : null}
+                  {metadataErrors.map((error) => (
+                    <div className="side-empty" key={error.provider}>{error.provider}: {error.message}</div>
+                  ))}
+                </div>
+              ) : null}
 
               <div className="panel-section-head">
                 <span>Bölümler</span>
@@ -945,15 +1008,52 @@ function ProjectCover({ project, large = false }) {
   );
 }
 
+function MetadataCandidate({ candidate, busy, onSelect }) {
+  const aliases = (candidate.synonyms || []).filter((item) => item && item !== candidate.title).slice(0, 3);
+  return (
+    <div className="metadata-candidate">
+      <span className="candidate-cover">
+        {candidate.coverUrl ? <img src={candidate.coverUrl} alt={candidate.title} loading="lazy" /> : <FileImage size={18} />}
+      </span>
+      <div>
+        <div className="candidate-title">
+          <strong>{candidate.title || candidate.originalTitle || "Adsız kayıt"}</strong>
+          <span>{candidate.provider}</span>
+        </div>
+        {candidate.originalTitle ? <small>{candidate.originalTitle}</small> : null}
+        {aliases.length ? <p>{aliases.join(" / ")}</p> : null}
+        <div className="project-card-meta">
+          <span>Skor {candidate.score || 0}</span>
+          {candidate.year ? <span>{candidate.year}</span> : null}
+          {candidate.author ? <span>{candidate.author}</span> : null}
+        </div>
+      </div>
+      <button type="button" className="ghost" disabled={busy} onClick={onSelect}>Seç</button>
+    </div>
+  );
+}
+
 function projectMetadataDraft(project) {
   const metadata = project?.metadata || {};
   return {
     title: metadata.title || project?.name || "",
+    originalTitle: metadata.originalTitle || "",
     author: metadata.author || "",
     artist: metadata.artist || "",
     status: metadata.status || "",
     year: metadata.year || "",
     description: metadata.description || "",
+    synonyms: (metadata.synonyms || []).join("\n"),
+  };
+}
+
+function projectMetadataPayload(draft) {
+  return {
+    ...draft,
+    synonyms: String(draft.synonyms || "")
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean),
   };
 }
 

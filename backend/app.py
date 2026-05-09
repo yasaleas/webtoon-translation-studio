@@ -6,7 +6,7 @@ from flask_cors import CORS
 
 from . import jobs
 from .fonts import font_path, list_fonts, upload_font
-from .project_metadata import fetch_and_store_project_metadata
+from .project_metadata import fetch_and_store_project_metadata, search_project_metadata
 from .settings import public_settings, save_settings
 from .storage import (
     add_box,
@@ -107,6 +107,23 @@ def create_app() -> Flask:
                     project_id,
                     query=payload.get("query"),
                     provider=payload.get("provider", "anilist"),
+                    source_id=payload.get("sourceId"),
+                )
+            )
+        except RuntimeError as error:
+            return {"error": str(error)}, 502
+        except ValueError as error:
+            return {"error": str(error)}, 400
+
+    @app.post("/api/projects/<project_id>/metadata/search")
+    def search_project_metadata_route(project_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(
+                search_project_metadata(
+                    project_id,
+                    query=payload.get("query"),
+                    provider=payload.get("provider", "all"),
                 )
             )
         except RuntimeError as error:

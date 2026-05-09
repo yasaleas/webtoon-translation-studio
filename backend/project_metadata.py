@@ -1,72 +1,126 @@
 import html
 import json
 import re
+import unicodedata
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .storage import load_project_metadata, save_project_cover, save_project_metadata
 
 ANILIST_ENDPOINT = "https://graphql.anilist.co"
+MANGADEX_API_BASE = "https://api.mangadex.org"
+MANGADEX_COVER_BASE = "https://uploads.mangadex.org/covers"
 MAX_COVER_BYTES = 12 * 1024 * 1024
 USER_AGENT = "WebtoonTranslationStudio/1.0"
 
-ANILIST_MEDIA_QUERY = """
-query ($search: String) {
-  Media(search: $search, type: MANGA) {
-    id
-    siteUrl
-    title {
-      romaji
-      english
-      native
-    }
-    description(asHtml: false)
-    coverImage {
-      extraLarge
-      large
-      medium
-      color
-    }
-    startDate {
-      year
-    }
-    status
-    format
-    countryOfOrigin
-    genres
-    tags {
-      name
-      rank
-    }
-    staff(perPage: 12) {
-      edges {
-        role
-        node {
-          name {
-            full
-            native
-          }
-        }
+ANILIST_MEDIA_FIELDS = """
+id
+siteUrl
+title {
+  romaji
+  english
+  native
+}
+description(asHtml: false)
+coverImage {
+  extraLarge
+  large
+  medium
+  color
+}
+synonyms
+startDate {
+  year
+}
+status
+format
+countryOfOrigin
+genres
+tags {
+  name
+  rank
+}
+staff(perPage: 12) {
+  edges {
+    role
+    node {
+      name {
+        full
+        native
       }
     }
   }
 }
 """
 
+ANILIST_SEARCH_QUERY = f"""
+query ($search: String, $page: Int, $perPage: Int) {{
+  Page(page: $page, perPage: $perPage) {{
+    media(search: $search, type: MANGA, sort: SEARCH_MATCH) {{
+      {ANILIST_MEDIA_FIELDS}
+    }}
+  }}
+}}
+"""
 
-def fetch_and_store_project_metadata(project_id: str, query: str | None = None, provider: str = "anilist") -> dict[str, Any]:
-    if provider != "anilist":
-        raise ValueError("Şimdilik sadece AniList metadata kaynağı destekleniyor.")
+ANILIST_MEDIA_QUERY = f"""
+query ($id: Int) {{
+  Media(id: $id, type: MANGA) {{
+    {ANILIST_MEDIA_FIELDS}
+  }}
+}}
+"""
+
+
+def search_project_metadata(project_id: str, query: str | None = None, provider: str = "all") -> dict[str, Any]:
     search = (query or project_id).strip()
     if not search:
         raise ValueError("Metadata araması için başlık gerekli.")
 
-    media = fetch_anilist_media(search)
-    metadata = metadata_from_anilist(project_id, media)
-    saved = save_project_metadata(project_id, metadata)
+    providers = ["mangadex", "anilist"] if provider in {"", "all"} else [provider]
+    candidates: list[dict[str, Any]] = []
+    errors = []
+    for item in providers:
+        try:
+            if item == "mangadex":
+                candidates.extend(mangadex_candidates(search))
+            elif item == "anilist":
+                candidates.extend(anilist_candidates(search))
+            else:
+                raise ValueError(f"Desteklenmeyen metadata kaynağı: {item}")
+        except RuntimeError as error:
+            errors.append({"provider": item, "message": str(error)})
 
-    cover_url = best_cover_url(media)
+    for candidate in candidates:
+        candidate["score"] = score_candidate(search, candidate_titles(candidate))
+    candidates.sort(key=lambda candidate: (candidate.get("score", 0), candidate.get("provider") == "mangadex"), reverse=True)
+    return {"query": search, "provider": provider or "all", "candidates": candidates[:12], "errors": errors}
+
+
+def fetch_and_store_project_metadata(
+    project_id: str,
+    query: str | None = None,
+    provider: str = "anilist",
+    source_id: str | int | None = None,
+) -> dict[str, Any]:
+    if not source_id:
+        return {"needsSelection": True, **search_project_metadata(project_id, query, provider)}
+
+    if provider == "anilist":
+        media = fetch_anilist_media_by_id(int(source_id))
+        metadata = metadata_from_anilist(project_id, media)
+        cover_url = best_anilist_cover_url(media)
+    elif provider == "mangadex":
+        media = fetch_mangadex_manga(str(source_id))
+        metadata = metadata_from_mangadex(project_id, media)
+        cover_url = best_mangadex_cover_url(media)
+    else:
+        raise ValueError(f"Desteklenmeyen metadata kaynağı: {provider}")
+
+    saved = save_project_metadata(project_id, metadata)
     if cover_url:
         try:
             content, content_type = download_cover(cover_url)
@@ -76,8 +130,8 @@ def fetch_and_store_project_metadata(project_id: str, query: str | None = None, 
     return saved
 
 
-def fetch_anilist_media(search: str) -> dict[str, Any]:
-    payload = json.dumps({"query": ANILIST_MEDIA_QUERY, "variables": {"search": search}}).encode("utf-8")
+def graphql_request(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     request = Request(
         ANILIST_ENDPOINT,
         data=payload,
@@ -102,14 +156,68 @@ def fetch_anilist_media(search: str) -> dict[str, Any]:
     if data.get("errors"):
         message = data["errors"][0].get("message") if isinstance(data["errors"][0], dict) else str(data["errors"][0])
         raise RuntimeError(f"AniList metadata hatası: {message}")
-    media = (data.get("data") or {}).get("Media")
+    return data
+
+
+def fetch_anilist_media_by_id(source_id: int) -> dict[str, Any]:
+    media = (graphql_request(ANILIST_MEDIA_QUERY, {"id": source_id}).get("data") or {}).get("Media")
     if not isinstance(media, dict):
-        raise ValueError(f"AniList üzerinde sonuç bulunamadı: {search}")
+        raise ValueError("AniList üzerinde sonuç bulunamadı.")
     return media
+
+
+def anilist_candidates(search: str) -> list[dict[str, Any]]:
+    data = graphql_request(ANILIST_SEARCH_QUERY, {"search": search, "page": 1, "perPage": 10})
+    media_items = ((data.get("data") or {}).get("Page") or {}).get("media") or []
+    return [candidate_from_anilist(media) for media in media_items if isinstance(media, dict)]
+
+
+def fetch_anilist_media(search: str) -> dict[str, Any]:
+    candidates = anilist_candidates(search)
+    if not candidates:
+        raise ValueError(f"AniList üzerinde sonuç bulunamadı: {search}")
+    return fetch_anilist_media_by_id(int(candidates[0]["sourceId"]))
+
+
+def mangadex_request(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+    query = f"?{urlencode(params or [])}" if params else ""
+    request = Request(f"{MANGADEX_API_BASE}{path}{query}", headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"MangaDex isteği başarısız oldu: HTTP {error.code} {detail[:180]}") from error
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError(f"MangaDex'e ulaşılamadı: {error}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError("MangaDex yanıtı çözümlenemedi.") from error
+    if data.get("result") not in {None, "ok"}:
+        raise RuntimeError(f"MangaDex metadata hatası: {data.get('result')}")
+    return data
+
+
+def mangadex_includes() -> list[tuple[str, str]]:
+    return [("includes[]", "author"), ("includes[]", "artist"), ("includes[]", "cover_art")]
+
+
+def mangadex_candidates(search: str) -> list[dict[str, Any]]:
+    data = mangadex_request("/manga", [("title", search), ("limit", "10"), *mangadex_includes()])
+    items = data.get("data") or []
+    return [candidate_from_mangadex(item) for item in items if isinstance(item, dict)]
+
+
+def fetch_mangadex_manga(source_id: str) -> dict[str, Any]:
+    data = mangadex_request(f"/manga/{source_id}", mangadex_includes())
+    manga = data.get("data")
+    if not isinstance(manga, dict):
+        raise ValueError("MangaDex üzerinde sonuç bulunamadı.")
+    return manga
 
 
 def metadata_from_anilist(project_id: str, media: dict[str, Any]) -> dict[str, Any]:
     title = media.get("title") or {}
+    synonyms = unique_titles(media.get("synonyms") or [])
     staff = author_artist_from_staff(media.get("staff") or {})
     year = ((media.get("startDate") or {}).get("year")) or ""
     tags = sorted(
@@ -118,7 +226,7 @@ def metadata_from_anilist(project_id: str, media: dict[str, Any]) -> dict[str, A
         reverse=True,
     )
     return {
-        **load_project_metadata(project_id),
+        **(load_project_metadata(project_id) if project_id else {}),
         "title": title.get("english") or title.get("romaji") or title.get("native") or project_id,
         "originalTitle": title.get("native") or title.get("romaji") or "",
         "author": staff["author"],
@@ -126,6 +234,7 @@ def metadata_from_anilist(project_id: str, media: dict[str, Any]) -> dict[str, A
         "status": normalize_status(media.get("status") or ""),
         "year": str(year) if year else "",
         "description": clean_description(media.get("description") or ""),
+        "synonyms": synonyms,
         "genres": [str(item) for item in (media.get("genres") or [])[:8]],
         "tags": [str(tag["name"]) for tag in tags[:8]],
         "source": {
@@ -135,6 +244,71 @@ def metadata_from_anilist(project_id: str, media: dict[str, Any]) -> dict[str, A
             "format": media.get("format") or "",
             "country": media.get("countryOfOrigin") or "",
         },
+    }
+
+
+def metadata_from_mangadex(project_id: str, manga: dict[str, Any]) -> dict[str, Any]:
+    attributes = manga.get("attributes") or {}
+    titles = title_values(attributes)
+    author, artist = creators_from_mangadex(manga.get("relationships") or [])
+    title = localized_value(attributes.get("title") or {}, ("en", "tr")) or (titles[0] if titles else project_id)
+    description = localized_value(attributes.get("description") or {}, ("en", "tr")) or first_localized_value(attributes.get("description") or {})
+    return {
+        **(load_project_metadata(project_id) if project_id else {}),
+        "title": title,
+        "originalTitle": original_title_from_mangadex(attributes),
+        "author": author,
+        "artist": artist or author,
+        "status": normalize_status(attributes.get("status") or ""),
+        "year": str(attributes.get("year") or ""),
+        "description": clean_description(description),
+        "synonyms": unique_titles(titles),
+        "genres": mangadex_tag_names(attributes.get("tags") or [], {"genre"}),
+        "tags": mangadex_tag_names(attributes.get("tags") or [], {"theme", "format"}),
+        "source": {
+            "provider": "mangadex",
+            "id": manga.get("id"),
+            "url": f"https://mangadex.org/title/{manga.get('id')}",
+            "format": attributes.get("publicationDemographic") or "",
+            "country": attributes.get("originalLanguage") or "",
+        },
+    }
+
+
+def candidate_from_anilist(media: dict[str, Any]) -> dict[str, Any]:
+    metadata = metadata_from_anilist("", media)
+    return {
+        "provider": "anilist",
+        "sourceId": media.get("id"),
+        "sourceUrl": media.get("siteUrl") or "",
+        "coverUrl": best_anilist_cover_url(media),
+        **candidate_payload(metadata),
+    }
+
+
+def candidate_from_mangadex(manga: dict[str, Any]) -> dict[str, Any]:
+    metadata = metadata_from_mangadex("", manga)
+    return {
+        "provider": "mangadex",
+        "sourceId": manga.get("id"),
+        "sourceUrl": metadata.get("source", {}).get("url", ""),
+        "coverUrl": best_mangadex_cover_url(manga),
+        **candidate_payload(metadata),
+    }
+
+
+def candidate_payload(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": metadata.get("title", ""),
+        "originalTitle": metadata.get("originalTitle", ""),
+        "author": metadata.get("author", ""),
+        "artist": metadata.get("artist", ""),
+        "status": metadata.get("status", ""),
+        "year": metadata.get("year", ""),
+        "description": metadata.get("description", ""),
+        "synonyms": metadata.get("synonyms", []),
+        "genres": metadata.get("genres", []),
+        "tags": metadata.get("tags", []),
     }
 
 
@@ -158,9 +332,87 @@ def author_artist_from_staff(staff: dict[str, Any]) -> dict[str, str]:
     return {"author": author or first_name, "artist": artist or author or first_name}
 
 
-def best_cover_url(media: dict[str, Any]) -> str:
+def creators_from_mangadex(relationships: list[dict[str, Any]]) -> tuple[str, str]:
+    author = ""
+    artist = ""
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
+            continue
+        name = ((relationship.get("attributes") or {}).get("name")) or ""
+        if not name:
+            continue
+        if relationship.get("type") == "author" and not author:
+            author = name
+        if relationship.get("type") == "artist" and not artist:
+            artist = name
+    return author, artist
+
+
+def title_values(attributes: dict[str, Any]) -> list[str]:
+    values = []
+    title = attributes.get("title") or {}
+    if isinstance(title, dict):
+        values.extend(title.values())
+    for alt_title in attributes.get("altTitles") or []:
+        if isinstance(alt_title, dict):
+            values.extend(alt_title.values())
+    return unique_titles(values)
+
+
+def localized_value(values: dict[str, Any], languages: tuple[str, ...]) -> str:
+    for language in languages:
+        value = values.get(language)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def first_localized_value(values: dict[str, Any]) -> str:
+    for value in values.values():
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def original_title_from_mangadex(attributes: dict[str, Any]) -> str:
+    original_language = attributes.get("originalLanguage")
+    title = attributes.get("title") or {}
+    if isinstance(title, dict) and original_language and title.get(original_language):
+        return str(title[original_language]).strip()
+    for alt_title in attributes.get("altTitles") or []:
+        if isinstance(alt_title, dict) and original_language and alt_title.get(original_language):
+            return str(alt_title[original_language]).strip()
+    return ""
+
+
+def mangadex_tag_names(tags: list[dict[str, Any]], groups: set[str]) -> list[str]:
+    names = []
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        attributes = tag.get("attributes") or {}
+        if attributes.get("group") not in groups:
+            continue
+        name = localized_value(attributes.get("name") or {}, ("en", "tr")) or first_localized_value(attributes.get("name") or {})
+        if name:
+            names.append(name)
+    return names[:8]
+
+
+def best_anilist_cover_url(media: dict[str, Any]) -> str:
     cover = media.get("coverImage") or {}
     return cover.get("extraLarge") or cover.get("large") or cover.get("medium") or ""
+
+
+def best_mangadex_cover_url(manga: dict[str, Any]) -> str:
+    manga_id = manga.get("id")
+    for relationship in manga.get("relationships") or []:
+        if not isinstance(relationship, dict) or relationship.get("type") != "cover_art":
+            continue
+        filename = (relationship.get("attributes") or {}).get("fileName")
+        if manga_id and filename:
+            return f"{MANGADEX_COVER_BASE}/{manga_id}/{filename}"
+    return ""
 
 
 def download_cover(url: str) -> tuple[bytes, str]:
@@ -179,7 +431,7 @@ def download_cover(url: str) -> tuple[bytes, str]:
 
 
 def clean_description(value: str) -> str:
-    text = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    text = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
     text = html.unescape(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -187,5 +439,53 @@ def clean_description(value: str) -> str:
 
 
 def normalize_status(value: str) -> str:
-    text = str(value or "").replace("_", " ").strip().title()
-    return text
+    return str(value or "").replace("_", " ").strip().title()
+
+
+def unique_titles(values: list[Any]) -> list[str]:
+    seen = set()
+    titles = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = normalize_title(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        titles.append(text)
+    return titles
+
+
+def candidate_titles(candidate: dict[str, Any]) -> list[str]:
+    return unique_titles([candidate.get("title", ""), candidate.get("originalTitle", ""), *(candidate.get("synonyms") or [])])
+
+
+def score_candidate(query: str, titles: list[str]) -> int:
+    normalized_query = normalize_title(query)
+    if not normalized_query:
+        return 0
+    query_tokens = set(normalized_query.split())
+    best = 0
+    for title in titles:
+        normalized_title = normalize_title(title)
+        if not normalized_title:
+            continue
+        if normalized_title == normalized_query:
+            return 100
+        best = max(best, int(SequenceMatcher(None, normalized_query, normalized_title).ratio() * 100))
+        title_tokens = set(normalized_title.split())
+        if query_tokens and title_tokens:
+            best = max(best, min(92, int((len(query_tokens & title_tokens) / len(query_tokens)) * 100)))
+        if normalized_query in normalized_title or normalized_title in normalized_query:
+            length_ratio = min(len(normalized_query), len(normalized_title)) / max(len(normalized_query), len(normalized_title))
+            best = max(best, int(82 + length_ratio * 14))
+    return best
+
+
+def normalize_title(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    text = text.lower().replace("’", "'").replace("ı", "i")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()

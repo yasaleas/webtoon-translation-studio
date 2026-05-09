@@ -27,10 +27,15 @@ export const api = {
   },
   projects: () => request("/api/projects"),
   episodes: (projectId) => request(`/api/projects/${encodeURIComponent(projectId)}/episodes`),
-  fetchProjectMetadata: (projectId, query) =>
+  searchProjectMetadata: (projectId, query) =>
+    request(`/api/projects/${encodeURIComponent(projectId)}/metadata/search`, {
+      method: "POST",
+      body: JSON.stringify({ query, provider: "all" }),
+    }),
+  fetchProjectMetadata: (projectId, candidate) =>
     request(`/api/projects/${encodeURIComponent(projectId)}/metadata/fetch`, {
       method: "POST",
-      body: JSON.stringify({ query, provider: "anilist" }),
+      body: JSON.stringify(candidate),
     }),
   saveProjectMetadata: (projectId, metadata) =>
     request(`/api/projects/${encodeURIComponent(projectId)}/metadata`, {

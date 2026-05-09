@@ -216,6 +216,7 @@ def default_project_metadata(project_id: str) -> dict[str, Any]:
         "status": "",
         "year": "",
         "description": "",
+        "synonyms": [],
         "genres": [],
         "tags": [],
         "coverFile": "",
@@ -233,10 +234,10 @@ def normalize_project_metadata(project_id: str, metadata: dict[str, Any] | None)
         value = metadata.get(key)
         if value is not None:
             base[key] = str(value).strip()
-    for key in ("genres", "tags"):
+    for key in ("synonyms", "genres", "tags"):
         value = metadata.get(key)
         if isinstance(value, list):
-            base[key] = [str(item).strip() for item in value if str(item).strip()][:12]
+            base[key] = [str(item).strip() for item in value if str(item).strip()][:18]
     source = metadata.get("source")
     base["source"] = source if isinstance(source, dict) else {}
     if not base["title"]:
