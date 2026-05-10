@@ -39,6 +39,12 @@ DETECTOR_MODEL_TITLES = {
     "huyvux3005/manga109-segmentation-bubble": "YOLO11 bubble segmentation",
     MANGA_TEXT_SEGMENTATION_2025_MODEL: "Manga Text Segmentation 2025",
 }
+DETECTOR_MODEL_DEFAULTS = {
+    DEFAULT_DETECTOR_MODEL: {"threshold": 0.55, "labels": "text_bubble,text_free", "output": "bubble,text_bubble,text_free"},
+    "ogkalu/comic-text-segmenter-yolov8m": {"threshold": 0.55, "labels": "text_comic", "output": "text_comic"},
+    "huyvux3005/manga109-segmentation-bubble": {"threshold": 0.55, "labels": "balloon", "output": "balloon"},
+    MANGA_TEXT_SEGMENTATION_2025_MODEL: {"threshold": 0.55, "labels": "text", "output": "text-mask"},
+}
 
 _OCR_PIPELINE: Any = None
 _OCR_GEOMETRY_PIPELINE: Any = None
@@ -65,7 +71,7 @@ def detect_text_regions_with_info(page: dict[str, Any], image_file: str | Path |
                 "detector": {**selected, "activeTitle": selected["title"], "source": "model"},
             }
 
-    if image_file:
+    if image_file and ai_bool("detectorFallbackEnabled", "DETECTOR_FALLBACK_ENABLED", False):
         detected = detect_light_text_regions(Path(image_file))
         if detected:
             return {
@@ -77,16 +83,12 @@ def detect_text_regions_with_info(page: dict[str, Any], image_file: str | Path |
                 },
             }
 
-    width = page.get("width") or 900
-    height = page.get("height") or 1400
     return {
-        "boxes": [
-            {"x": width * 0.18, "y": height * 0.06, "w": width * 0.54, "h": height * 0.12},
-        ],
+        "boxes": [],
         "detector": {
             **selected,
-            "activeTitle": "Varsayılan örnek kutu",
-            "source": "placeholder",
+            "activeTitle": selected["title"],
+            "source": "none",
         },
     }
 
@@ -109,6 +111,7 @@ def detector_model_info(model_id: str) -> dict[str, str]:
         "family": family,
         "activeTitle": DETECTOR_MODEL_TITLES.get(normalized, normalized),
         "source": "model",
+        "output": str(DETECTOR_MODEL_DEFAULTS.get(normalized, {}).get("output", "")),
     }
 
 
@@ -173,14 +176,10 @@ def detect_with_rtdetr(image_file: Path, model_id: str | None = None) -> list[di
         results = _RTDETR_PROCESSOR.post_process_object_detection(
             outputs,
             target_sizes=target_sizes,
-            threshold=float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", 0.45)),
+            threshold=detector_threshold(model_id),
         )[0]
 
-        allowed_labels = {
-            item.strip().lower()
-            for item in str(ai_value("rtdetrTextLabels", "RTDETR_TEXT_LABELS", "text_bubble,text_free")).split(",")
-            if item.strip()
-        }
+        allowed_labels = detector_allowed_labels(model_id)
         boxes = []
         for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
             label_name = _RTDETR_MODEL.config.id2label.get(int(label), str(int(label))).lower()
@@ -220,12 +219,8 @@ def detect_with_rtdetr_onnx(image_file: Path, model_id: str) -> list[dict[str, f
             },
         )
         id2label = {0: "bubble", 1: "text_bubble", 2: "text_free"}
-        allowed_labels = {
-            item.strip().lower()
-            for item in str(ai_value("rtdetrTextLabels", "RTDETR_TEXT_LABELS", "text_bubble,text_free")).split(",")
-            if item.strip()
-        }
-        threshold = float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", 0.55))
+        allowed_labels = detector_allowed_labels(model_id)
+        threshold = detector_threshold(model_id)
         candidates = []
         for label, box, score in zip(labels[0], boxes[0], scores[0]):
             label_name = id2label.get(int(label), str(int(label)))
@@ -249,7 +244,7 @@ def detect_with_ultralytics(image_file: Path, model_id: str) -> list[dict[str, f
         model = YOLO(str(model_path))
         _YOLO_MODELS[cache_key] = model
 
-    threshold = float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", 0.55))
+    threshold = detector_threshold(model_id)
     kwargs = {"source": str(image_file), "conf": threshold, "verbose": False}
     if device:
         kwargs["device"] = device
@@ -257,7 +252,7 @@ def detect_with_ultralytics(image_file: Path, model_id: str) -> list[dict[str, f
     with Image.open(image_file) as image:
         image_size = image.size
 
-    allowed_labels = detector_allowed_labels()
+    allowed_labels = detector_allowed_labels(model_id)
     boxes: list[dict[str, float]] = []
     for result in results:
         result_boxes = getattr(result, "boxes", None)
@@ -366,7 +361,7 @@ def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) ->
         else:
             probs = model(tensor).sigmoid()
     prob_map = probs[0, 0, :height, :width].detach().cpu().numpy()
-    threshold = float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", 0.55))
+    threshold = detector_threshold(model_id)
     mask = (prob_map > threshold).astype(np.uint8) * 255
     close_size = max(3, min(17, make_odd(int(round(min(width, height) * 0.008)))))
     close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
@@ -374,7 +369,7 @@ def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) ->
     mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    min_area = max(30, int(width * height * 0.00001))
+    min_area = max(30, int(width * height * detector_min_area_ratio()))
     boxes = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
@@ -382,7 +377,7 @@ def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) ->
             continue
         pad = max(2, int(round(min(w, h) * 0.12)))
         boxes.append(clamp_detection_box({"x": x - pad, "y": y - pad, "w": w + pad * 2, "h": h + pad * 2, "score": 1.0, "label": "text"}, image_size))
-    return sorted(non_max_suppression(merge_close_boxes(boxes)), key=lambda item: (item["y"], item["x"]))
+    return sorted(non_max_suppression(merge_nearby_boxes(boxes, detector_merge_gap())), key=lambda item: (item["y"], item["x"]))
 
 
 def convert_batchnorm_to_groupnorm(module: Any, nn_module: Any) -> None:
@@ -401,7 +396,16 @@ def make_odd(value: int) -> int:
     return value if value % 2 else value + 1
 
 
-def detector_allowed_labels() -> set[str]:
+def detector_allowed_labels(model_id: str | None = None) -> set[str]:
+    if model_id:
+        normalized = normalize_detector_model_id(model_id)
+        defaults = DETECTOR_MODEL_DEFAULTS.get(normalized)
+        if defaults and normalized != DEFAULT_DETECTOR_MODEL:
+            return {
+                item.strip().lower()
+                for item in str(defaults.get("labels", "")).split(",")
+                if item.strip()
+            }
     return {
         item.strip().lower()
         for item in str(ai_value("rtdetrTextLabels", "RTDETR_TEXT_LABELS", "text_bubble,text_free")).split(",")
@@ -417,9 +421,24 @@ def detector_label_allowed(label_name: str, allowed_labels: set[str]) -> bool:
         return True
     if "text" in normalized and allowed_labels.intersection({"text_free", "text_bubble"}):
         return True
+    if normalized in {"balloon", "speech_balloon"} and allowed_labels.intersection({"balloon", "bubble", "text_bubble"}):
+        return True
     if "bubble" in normalized and allowed_labels.intersection({"bubble", "text_bubble"}):
         return True
-    return normalized.isdigit()
+    return False
+
+
+def detector_threshold(model_id: str | None = None) -> float:
+    fallback = DETECTOR_MODEL_DEFAULTS.get(normalize_detector_model_id(model_id or ""), {}).get("threshold", 0.55)
+    return float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", fallback))
+
+
+def detector_min_area_ratio() -> float:
+    return max(0.0, float(ai_value("detectorMinAreaRatio", "DETECTOR_MIN_AREA_RATIO", 0.00008)))
+
+
+def detector_merge_gap() -> int:
+    return max(0, int(float(ai_value("detectorMergeGap", "DETECTOR_MERGE_GAP", 18))))
 
 
 def clamp_detection_box(box: dict[str, float], image_size: tuple[int, int]) -> dict[str, float]:
@@ -440,6 +459,46 @@ def non_max_suppression(boxes: list[dict[str, float]]) -> list[dict[str, float]]
             continue
         kept.append(box)
     return kept
+
+
+def merge_nearby_boxes(boxes: list[dict[str, float]], max_gap: int) -> list[dict[str, float]]:
+    if max_gap <= 0:
+        return merge_close_boxes(boxes)
+    merged: list[dict[str, float]] = []
+    for box in boxes:
+        current = dict(box)
+        changed = True
+        while changed:
+            changed = False
+            for index, existing in enumerate(merged):
+                if not boxes_are_near(existing, current, max_gap):
+                    continue
+                current = union_detection_boxes(existing, current)
+                merged.pop(index)
+                changed = True
+                break
+        merged.append(current)
+    return merged
+
+
+def boxes_are_near(first: dict[str, float], second: dict[str, float], max_gap: int) -> bool:
+    expanded = {
+        "x": first["x"] - max_gap,
+        "y": first["y"] - max_gap,
+        "w": first["w"] + max_gap * 2,
+        "h": first["h"] + max_gap * 2,
+    }
+    return overlap_ratio(expanded, second) > 0
+
+
+def union_detection_boxes(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:
+    x1 = min(first["x"], second["x"])
+    y1 = min(first["y"], second["y"])
+    x2 = max(first["x"] + first["w"], second["x"] + second["w"])
+    y2 = max(first["y"] + first["h"], second["y"] + second["h"])
+    score = max(float(first.get("score", 0)), float(second.get("score", 0)))
+    label = first.get("label") or second.get("label", "")
+    return {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "score": score, "label": label}
 
 
 def detect_light_text_regions(image_file: Path) -> list[dict[str, float]]:

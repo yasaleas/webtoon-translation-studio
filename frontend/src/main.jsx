@@ -60,23 +60,55 @@ const OCR_LANGUAGE_OPTIONS = [
   ["tr", "Türkçe"],
 ];
 const DETECT_LABEL_OPTIONS = [
-  ["text_bubble,text_free", "Sadece yazı alanları"],
-  ["text_free", "Balonsuz yazılar"],
-  ["text_bubble", "Balon içi yazılar"],
+  ["text_bubble,text_free", "Yazı kutuları"],
+  ["text_free", "Balonsuz yazı"],
+  ["text_bubble", "Balon içi yazı"],
   ["bubble,text_bubble,text_free", "Balon + yazı"],
 ];
-const DETECTION_MODEL_OPTIONS = [
-  ["ogkalu/comic-text-and-bubble-detector", "RT-DETR V2 text/bubble"],
-  ["ogkalu/comic-text-segmenter-yolov8m", "YOLOv8m text segmenter"],
-  ["huyvux3005/manga109-segmentation-bubble", "Manga109 bubble segmentation"],
-  ["a-b-c-x-y-z/Manga-Text-Segmentation-2025", "Manga Text Segmentation 2025"],
-];
-const DETECTION_MODEL_NOTES = {
-  "ogkalu/comic-text-and-bubble-detector": "Dengeli varsayılan model. Balon içi ve balonsuz yazı kutuları için RT-DETR kullanır.",
-  "ogkalu/comic-text-segmenter-yolov8m": "YOLOv8m segmentasyon modeli. Uzun dikey webtoon sayfalarında daha iyi oran toleransı hedefler.",
-  "huyvux3005/manga109-segmentation-bubble": "YOLO11 tabanlı konuşma balonu segmentasyonu. Kutular maskeden daraltılarak oluşturulur.",
-  "a-b-c-x-y-z/Manga-Text-Segmentation-2025": "Piksel düzeyinde manga metin maskesi üretir. Mevcut editörde maskeler sıkı yazı kutularına çevrilir.",
+const DETECTION_MODEL_CONFIGS = {
+  "ogkalu/comic-text-and-bubble-detector": {
+    label: "RT-DETR V2 text/bubble",
+    note: "Girdi: tam sayfa RGB görsel. Çıktı: bubble, text_bubble, text_free sınıflı kutular ve skorlar.",
+    output: "bubble / text_bubble / text_free",
+    thresholdLabel: "Güven eşiği",
+    defaultThreshold: 0.55,
+    defaultLabels: "text_bubble,text_free",
+    labelOptions: DETECT_LABEL_OPTIONS,
+    showLabelMode: true,
+    showMergeGap: false,
+  },
+  "ogkalu/comic-text-segmenter-yolov8m": {
+    label: "YOLOv8m text segmenter",
+    note: "Girdi: tam sayfa görsel. Çıktı: text_comic sınıfı, kutu ve varsa segmentasyon maskesi. Uzun webtoon oranlarına daha toleranslıdır.",
+    output: "text_comic",
+    thresholdLabel: "Güven eşiği",
+    defaultThreshold: 0.55,
+    defaultLabels: "text_comic",
+    showLabelMode: false,
+    showMergeGap: false,
+  },
+  "huyvux3005/manga109-segmentation-bubble": {
+    label: "Manga109 bubble segmentation",
+    note: "Girdi: tam sayfa görsel. Çıktı: balloon sınıfı ve segmentasyon maskesi. Yazıyı değil konuşma balonunu hedefler.",
+    output: "balloon",
+    thresholdLabel: "Güven eşiği",
+    defaultThreshold: 0.55,
+    defaultLabels: "balloon",
+    showLabelMode: false,
+    showMergeGap: false,
+  },
+  "a-b-c-x-y-z/Manga-Text-Segmentation-2025": {
+    label: "Manga Text Segmentation 2025",
+    note: "Girdi: tam sayfa RGB görsel. Çıktı: piksel düzeyinde metin olasılık maskesi; editör bu maskeyi kutulara çevirir.",
+    output: "text mask",
+    thresholdLabel: "Maske eşiği",
+    defaultThreshold: 0.55,
+    defaultLabels: "text",
+    showLabelMode: false,
+    showMergeGap: true,
+  },
 };
+const DETECTION_MODEL_OPTIONS = Object.entries(DETECTION_MODEL_CONFIGS).map(([value, config]) => [value, config.label]);
 const INPAINT_MODEL_OPTIONS = [
   ["lama", "LaMa"],
   ["mat", "MAT"],
@@ -1912,6 +1944,8 @@ function SettingsPage({ settings, fonts, onClose, onSave, onUploadFont }) {
   const ai = draft.ai;
   const editor = draft.editor;
   const reader = draft.reader;
+  const detectionConfig = detectionModelConfig(ai.rtdetrModelId);
+  const minAreaPercent = roundDetectorPercent(ai.detectorMinAreaRatio);
 
   useEffect(() => {
     setDraft(draftSettings(settings));
@@ -1919,6 +1953,16 @@ function SettingsPage({ settings, fonts, onClose, onSave, onUploadFont }) {
 
   function patchAi(patch) {
     setDraft((value) => ({ ...value, ai: { ...value.ai, ...patch } }));
+  }
+
+  function changeDetectionModel(modelId) {
+    const config = detectionModelConfig(modelId);
+    patchAi({
+      rtdetrModelId: modelId,
+      rtdetrThreshold: config.defaultThreshold,
+      rtdetrTextLabels: config.defaultLabels,
+      detectorMergeGap: config.showMergeGap ? ai.detectorMergeGap : 18,
+    });
   }
 
   function patchEditor(patch) {
@@ -2086,10 +2130,18 @@ function SettingsPage({ settings, fonts, onClose, onSave, onUploadFont }) {
           <section className="settings-section">
             <h3>Algılama ve OCR</h3>
             <div className="settings-grid">
-              <label className="wide">Algılama modeli<SelectWithOptions value={ai.rtdetrModelId} options={DETECTION_MODEL_OPTIONS} onChange={(value) => patchAi({ rtdetrModelId: value })} /></label>
-              <p className="settings-note wide">{DETECTION_MODEL_NOTES[ai.rtdetrModelId] || "Özel model kimliği kullanılacak. Desteklenen RT-DETR, YOLO/Ultralytics veya Manga Text Segmentation biçimlerinden biri olmalı."}</p>
-              <label>Algılama modu<SelectWithOptions value={ai.rtdetrTextLabels} options={DETECT_LABEL_OPTIONS} onChange={(value) => patchAi({ rtdetrTextLabels: value })} /></label>
-              <label>Eşik<input type="number" min="0.05" max="0.95" step="0.01" value={ai.rtdetrThreshold} onChange={(event) => patchAi({ rtdetrThreshold: Number(event.target.value) })} /></label>
+              <label className="wide">Algılama modeli<SelectWithOptions value={ai.rtdetrModelId} options={DETECTION_MODEL_OPTIONS} onChange={changeDetectionModel} /></label>
+              <p className="settings-note wide">{detectionConfig.note}</p>
+              <label>Model çıktısı<input value={detectionConfig.output} readOnly /></label>
+              {detectionConfig.showLabelMode ? (
+                <label>Algılama modu<SelectWithOptions value={ai.rtdetrTextLabels} options={detectionConfig.labelOptions} onChange={(value) => patchAi({ rtdetrTextLabels: value })} /></label>
+              ) : (
+                <label>Algılama modu<input value="Modelin sabit çıktısı kullanılır" readOnly /></label>
+              )}
+              <label>{detectionConfig.thresholdLabel}<input type="number" min="0.05" max="0.95" step="0.01" value={ai.rtdetrThreshold} onChange={(event) => patchAi({ rtdetrThreshold: Number(event.target.value) })} /></label>
+              <label>Min alan (%)<input type="number" min="0" max="1" step="0.001" value={minAreaPercent} onChange={(event) => patchAi({ detectorMinAreaRatio: Number(event.target.value) / 100 })} /></label>
+              {detectionConfig.showMergeGap ? <label>Birleştirme mesafesi<input type="number" min="0" max="120" step="1" value={ai.detectorMergeGap} onChange={(event) => patchAi({ detectorMergeGap: Number(event.target.value) })} /></label> : null}
+              <label className="check-row"><input type="checkbox" checked={ai.detectorFallbackEnabled} onChange={(event) => patchAi({ detectorFallbackEnabled: event.target.checked })} /> Boş sonuçta yerel algılayıcı</label>
               <label>OCR dili<SelectWithOptions value={ai.ocrLanguage} options={OCR_LANGUAGE_OPTIONS} onChange={(value) => patchAi({ ocrLanguage: value })} /></label>
               <label className="check-row"><input type="checkbox" checked={ai.ocrPerspectiveEnabled} onChange={(event) => patchAi({ ocrPerspectiveEnabled: event.target.checked })} /> OCR perspektif kutusu</label>
               <label>Minimum açı<input type="number" min="0" max="45" step="1" value={ai.ocrPerspectiveMinAngle} onChange={(event) => patchAi({ ocrPerspectiveMinAngle: Number(event.target.value) })} /></label>
@@ -2131,6 +2183,24 @@ function SelectWithOptions({ value, options, onChange }) {
       ))}
     </select>
   );
+}
+
+function detectionModelConfig(modelId) {
+  return DETECTION_MODEL_CONFIGS[modelId] || {
+    label: modelId || "Özel model",
+    note: "Özel model kimliği kullanılacak. RT-DETR, Ultralytics/YOLO veya desteklenen segmentasyon biçimlerinden biri olmalı.",
+    output: "özel",
+    thresholdLabel: "Eşik",
+    defaultThreshold: 0.55,
+    defaultLabels: "text_bubble,text_free",
+    labelOptions: DETECT_LABEL_OPTIONS,
+    showLabelMode: true,
+    showMergeGap: false,
+  };
+}
+
+function roundDetectorPercent(value) {
+  return Number(((Number(value) || 0) * 100).toFixed(3));
 }
 
 function ModelNameInput({ value, options, onChange }) {
@@ -2220,8 +2290,8 @@ function detectorJobText(detector) {
   if (detector.source === "fallback" && activeTitle !== detector.title) {
     return `Çalışan model: ${activeTitle} | Seçili model: ${detector.title}`;
   }
-  if (detector.source === "placeholder") {
-    return `Seçili model: ${detector.title} | Sonuç yok, örnek kutu kullanıldı`;
+  if (detector.source === "none") {
+    return `Çalışan model: ${activeTitle} | Sonuç bulunmadı`;
   }
   return `Çalışan model: ${activeTitle}`;
 }
@@ -2494,6 +2564,9 @@ function draftSettings(settings) {
       rtdetrModelId: ai.rtdetrModelId || "ogkalu/comic-text-and-bubble-detector",
       rtdetrThreshold: ai.rtdetrThreshold ?? 0.55,
       rtdetrTextLabels: ai.rtdetrTextLabels || "text_bubble,text_free",
+      detectorFallbackEnabled: Boolean(ai.detectorFallbackEnabled),
+      detectorMinAreaRatio: ai.detectorMinAreaRatio ?? 0.00008,
+      detectorMergeGap: ai.detectorMergeGap ?? 18,
       ocrLanguage: ai.ocrLanguage || "en",
       ocrPerspectiveEnabled: ai.ocrPerspectiveEnabled ?? true,
       ocrPerspectiveMinAngle: ai.ocrPerspectiveMinAngle ?? 7,

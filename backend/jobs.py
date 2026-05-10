@@ -123,8 +123,8 @@ def detect(project_id: str, episode_id: str) -> dict[str, Any]:
             active_title = detection["detector"].get("activeTitle") or detector["title"]
             if detection["detector"].get("source") == "fallback":
                 advance(job, int(((index - 1) / total) * 95), f"{detector['title']} sonuç vermedi, {active_title} kullanılıyor ({index}/{total})")
-            elif detection["detector"].get("source") == "placeholder":
-                advance(job, int(((index - 1) / total) * 95), f"{detector['title']} sonuç vermedi, örnek kutu ekleniyor ({index}/{total})")
+            elif detection["detector"].get("source") == "none":
+                advance(job, int(((index - 1) / total) * 95), f"{detector['title']} sonuç vermedi ({index}/{total})")
             for bbox in detection["boxes"]:
                 if any(overlap_ratio(box["bbox"], bbox) > 0.55 for box in page_existing):
                     continue
@@ -137,7 +137,9 @@ def detect(project_id: str, episode_id: str) -> dict[str, Any]:
         selected_title = final_detector.get("title") or detector["title"]
         if final_title != selected_title:
             return complete(job, f"Yazı tespiti tamamlandı. {created} kutu eklendi. Çalışan: {final_title} (seçili: {selected_title}).")
-        return complete(job, f"Yazı tespiti tamamlandı. {created} kutu eklendi. Model: {final_title}.")
+        if created:
+            return complete(job, f"Yazı tespiti tamamlandı. {created} kutu eklendi. Model: {final_title}.")
+        return complete(job, f"Yazı tespiti tamamlandı. {final_title} kutu bulamadı.")
     except Exception as error:
         return fail(job, error)
 

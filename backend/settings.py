@@ -37,6 +37,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "rtdetrModelId": "ogkalu/comic-text-and-bubble-detector",
         "rtdetrThreshold": 0.55,
         "rtdetrTextLabels": "text_bubble,text_free",
+        "detectorFallbackEnabled": False,
+        "detectorMinAreaRatio": 0.00008,
+        "detectorMergeGap": 18,
         "ocrLanguage": "en",
         "ocrPerspectiveEnabled": True,
         "ocrPerspectiveMinAngle": 7,
@@ -132,6 +135,10 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
     if "rtdetrThreshold" in incoming_ai:
         current_ai["rtdetrThreshold"] = clamp_float(incoming_ai["rtdetrThreshold"], 0.05, 0.95, 0.55)
+    if "detectorMinAreaRatio" in incoming_ai:
+        current_ai["detectorMinAreaRatio"] = clamp_float(incoming_ai["detectorMinAreaRatio"], 0, 0.01, 0.00008)
+    if "detectorMergeGap" in incoming_ai:
+        current_ai["detectorMergeGap"] = int(clamp_float(incoming_ai["detectorMergeGap"], 0, 120, 18))
     if "ocrPerspectiveMinAngle" in incoming_ai:
         current_ai["ocrPerspectiveMinAngle"] = clamp_float(incoming_ai["ocrPerspectiveMinAngle"], 0, 45, 7)
     if "ocrPerspectivePadding" in incoming_ai:
@@ -150,6 +157,8 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
         current_ai["ocrPerspectiveEnabled"] = bool(incoming_ai["ocrPerspectiveEnabled"])
     if "inpaintPerspectiveMask" in incoming_ai:
         current_ai["inpaintPerspectiveMask"] = bool(incoming_ai["inpaintPerspectiveMask"])
+    if "detectorFallbackEnabled" in incoming_ai:
+        current_ai["detectorFallbackEnabled"] = bool(incoming_ai["detectorFallbackEnabled"])
     if "strictMode" in incoming_ai:
         current_ai["strictMode"] = bool(incoming_ai["strictMode"])
     if "geminiKeys" in incoming_ai:
