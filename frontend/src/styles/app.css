@@ -127,6 +127,15 @@ button {
   white-space: nowrap;
 }
 
+.job-status small {
+  overflow: hidden;
+  color: #7f8a96;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .job-status em {
   color: #98a3ad;
   font-style: normal;
@@ -1444,6 +1453,10 @@ textarea:focus-visible {
 
 .job-status strong {
   color: var(--text-soft);
+}
+
+.job-status small {
+  color: var(--muted);
 }
 
 .job-status b {

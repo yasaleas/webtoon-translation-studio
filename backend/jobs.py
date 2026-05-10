@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .config import PROJECTS_DIR
 from .settings import ai_bool, ai_value, clamp_float, load_settings
-from .services.ai import detect_text_regions, inpaint_mask, inpaint_region, run_ocr_with_geometry, sanitize_ocr_text, translate_texts
+from .services.ai import current_detector_model_info, detect_text_regions_with_info, inpaint_mask, inpaint_region, run_ocr_with_geometry, sanitize_ocr_text, translate_texts
 from .storage import (
     add_box,
     add_manual_mask,
@@ -98,9 +98,11 @@ def list_jobs() -> list[dict[str, Any]]:
 
 
 def detect(project_id: str, episode_id: str) -> dict[str, Any]:
-    job = create_job("detect", "Yazı alanları tespit ediliyor")
+    detector = current_detector_model_info()
+    job = create_job("detect", f"{detector['title']} hazırlanıyor")
+    job["detector"] = detector
     try:
-        start(job)
+        start(job, f"{detector['title']} yükleniyor")
         state = load_state(project_id, episode_id)
         state["boxes"] = [
             box
@@ -113,16 +115,29 @@ def detect(project_id: str, episode_id: str) -> dict[str, Any]:
         pages = page_records(project_id, episode_id)
         total = max(1, len(pages))
         for index, page in enumerate(pages, start=1):
-            advance(job, int(((index - 1) / total) * 95), f"Yazı alanları tespit ediliyor ({index}/{total})")
+            active_title = job.get("detector", {}).get("activeTitle") or detector["title"]
+            advance(job, int(((index - 1) / total) * 95), f"{active_title} çalışıyor ({index}/{total})")
             page_existing = [box for box in existing if box["pageId"] == page["id"]]
-            for bbox in detect_text_regions(page, image_path(project_id, episode_id, page["id"])):
+            detection = detect_text_regions_with_info(page, image_path(project_id, episode_id, page["id"]))
+            job["detector"] = detection["detector"]
+            active_title = detection["detector"].get("activeTitle") or detector["title"]
+            if detection["detector"].get("source") == "fallback":
+                advance(job, int(((index - 1) / total) * 95), f"{detector['title']} sonuç vermedi, {active_title} kullanılıyor ({index}/{total})")
+            elif detection["detector"].get("source") == "placeholder":
+                advance(job, int(((index - 1) / total) * 95), f"{detector['title']} sonuç vermedi, örnek kutu ekleniyor ({index}/{total})")
+            for bbox in detection["boxes"]:
                 if any(overlap_ratio(box["bbox"], bbox) > 0.55 for box in page_existing):
                     continue
                 box = add_box(project_id, episode_id, {"pageId": page["id"], "bbox": bbox})
                 page_existing.append(box)
                 existing.append(box)
                 created += 1
-        return complete(job, f"Yazı tespiti tamamlandı. {created} yeni yazı kutusu eklendi.")
+        final_detector = job.get("detector", {})
+        final_title = final_detector.get("activeTitle") or detector["title"]
+        selected_title = final_detector.get("title") or detector["title"]
+        if final_title != selected_title:
+            return complete(job, f"Yazı tespiti tamamlandı. {created} kutu eklendi. Çalışan: {final_title} (seçili: {selected_title}).")
+        return complete(job, f"Yazı tespiti tamamlandı. {created} kutu eklendi. Model: {final_title}.")
     except Exception as error:
         return fail(job, error)
 

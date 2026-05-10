@@ -52,21 +52,64 @@ _MANGA_TEXT_SEGMENTATION_CACHE: dict[tuple[str, str], Any] = {}
 
 
 def detect_text_regions(page: dict[str, Any], image_file: str | Path | None = None) -> list[dict[str, float]]:
+    return detect_text_regions_with_info(page, image_file)["boxes"]
+
+
+def detect_text_regions_with_info(page: dict[str, Any], image_file: str | Path | None = None) -> dict[str, Any]:
+    selected = current_detector_model_info()
     if image_file:
         model_boxes = detect_with_configured_model(Path(image_file))
         if model_boxes:
-            return model_boxes
+            return {
+                "boxes": model_boxes,
+                "detector": {**selected, "activeTitle": selected["title"], "source": "model"},
+            }
 
     if image_file:
         detected = detect_light_text_regions(Path(image_file))
         if detected:
-            return detected
+            return {
+                "boxes": detected,
+                "detector": {
+                    **selected,
+                    "activeTitle": "Yerel hafif balon algılayıcı",
+                    "source": "fallback",
+                },
+            }
 
     width = page.get("width") or 900
     height = page.get("height") or 1400
-    return [
-        {"x": width * 0.18, "y": height * 0.06, "w": width * 0.54, "h": height * 0.12},
-    ]
+    return {
+        "boxes": [
+            {"x": width * 0.18, "y": height * 0.06, "w": width * 0.54, "h": height * 0.12},
+        ],
+        "detector": {
+            **selected,
+            "activeTitle": "Varsayılan örnek kutu",
+            "source": "placeholder",
+        },
+    }
+
+
+def current_detector_model_info() -> dict[str, str]:
+    return detector_model_info(str(ai_value("rtdetrModelId", "RTDETR_MODEL_ID", DEFAULT_DETECTOR_MODEL)).strip())
+
+
+def detector_model_info(model_id: str) -> dict[str, str]:
+    normalized = normalize_detector_model_id(model_id or DEFAULT_DETECTOR_MODEL)
+    if normalized == MANGA_TEXT_SEGMENTATION_2025_MODEL:
+        family = "manga-text-segmentation"
+    elif is_ultralytics_detector(normalized):
+        family = "ultralytics"
+    else:
+        family = "rtdetr"
+    return {
+        "id": normalized,
+        "title": DETECTOR_MODEL_TITLES.get(normalized, normalized),
+        "family": family,
+        "activeTitle": DETECTOR_MODEL_TITLES.get(normalized, normalized),
+        "source": "model",
+    }
 
 
 def detect_with_configured_model(image_file: Path) -> list[dict[str, float]]:

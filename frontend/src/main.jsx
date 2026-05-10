@@ -1247,6 +1247,7 @@ function JobStatusBar({ jobs }) {
     );
   }
   const progress = clamp(Number(job.progress || 0), 0, 100);
+  const detectorText = job.type === "detect" ? detectorJobText(job.detector) : "";
   return (
     <div className={`job-status ${job.status}`}>
       <div>
@@ -1254,6 +1255,7 @@ function JobStatusBar({ jobs }) {
         <strong>{job.message || job.status}</strong>
         <em>{Math.round(progress)}%</em>
       </div>
+      {detectorText ? <small>{detectorText}</small> : null}
       <b><i style={{ width: `${progress}%` }} /></b>
     </div>
   );
@@ -2189,7 +2191,13 @@ function extractBrushMask(canvas) {
 }
 
 function visibleJob(jobs) {
-  return jobs.find((job) => ["queued", "running", "failed"].includes(job.status)) || null;
+  return jobs.find((job) => ["queued", "running", "failed"].includes(job.status)) || recentCompletedJob(jobs);
+}
+
+function recentCompletedJob(jobs) {
+  const job = jobs.find((item) => item.status === "done");
+  if (!job?.completedAt) return null;
+  return Date.now() - new Date(job.completedAt).getTime() < 120000 ? job : null;
 }
 
 function jobLabel(type) {
@@ -2204,6 +2212,18 @@ function jobLabel(type) {
     unplace: "Kaldırma",
     save: "Kaydetme",
   }[type] || type;
+}
+
+function detectorJobText(detector) {
+  if (!detector?.title) return "";
+  const activeTitle = detector.activeTitle || detector.title;
+  if (detector.source === "fallback" && activeTitle !== detector.title) {
+    return `Çalışan model: ${activeTitle} | Seçili model: ${detector.title}`;
+  }
+  if (detector.source === "placeholder") {
+    return `Seçili model: ${detector.title} | Sonuç yok, örnek kutu kullanıldı`;
+  }
+  return `Çalışan model: ${activeTitle}`;
 }
 
 function isEditableTarget(target) {
