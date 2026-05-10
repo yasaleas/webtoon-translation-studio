@@ -64,7 +64,7 @@ def create_app() -> Flask:
     def ocr_status():
         return {
             "ok": True,
-            "detector": "RT-DETR V2 text_bubble/text_free detection",
+            "detector": "RT-DETR V2, YOLO segmenter ve Manga text segmentation",
             "ocr": "PaddleOCR-VL 1.5",
             "inpaint": "IOPaint LaMa",
             "translation": "Gemini API",

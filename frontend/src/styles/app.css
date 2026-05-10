@@ -1025,6 +1025,13 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.settings-note {
+  margin: -4px 0 0;
+  color: #7f8a96;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .check-row {
   display: flex;
   align-items: center;

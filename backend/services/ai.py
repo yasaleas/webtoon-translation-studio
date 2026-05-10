@@ -21,23 +21,39 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 
 MODEL_REGISTRY = {
-    "detector": "RT-DETR V2",
+    "detector": "RT-DETR V2 / YOLO / Manga text segmentation",
     "ocr": "PaddleOCR-VL 1.5",
     "translator": "Gemini",
     "inpaint": "IOPaint",
 }
 NEAREST_RESAMPLE = getattr(Image, "Resampling", Image).NEAREST
+DEFAULT_DETECTOR_MODEL = "ogkalu/comic-text-and-bubble-detector"
+MANGA_TEXT_SEGMENTATION_2025_MODEL = "a-b-c-x-y-z/Manga-Text-Segmentation-2025"
+ULTRALYTICS_DETECTOR_FILES = {
+    "ogkalu/comic-text-segmenter-yolov8m": "comic-text-segmenter.pt",
+    "huyvux3005/manga109-segmentation-bubble": "best.pt",
+}
+DETECTOR_MODEL_TITLES = {
+    DEFAULT_DETECTOR_MODEL: "RT-DETR V2",
+    "ogkalu/comic-text-segmenter-yolov8m": "YOLOv8m text segmenter",
+    "huyvux3005/manga109-segmentation-bubble": "YOLO11 bubble segmentation",
+    MANGA_TEXT_SEGMENTATION_2025_MODEL: "Manga Text Segmentation 2025",
+}
 
 _OCR_PIPELINE: Any = None
 _OCR_GEOMETRY_PIPELINE: Any = None
 _RTDETR_MODEL: Any = None
 _RTDETR_PROCESSOR: Any = None
 _RTDETR_ONNX: Any = None
+_RTDETR_MODEL_ID: str = ""
+_RTDETR_ONNX_MODEL_ID: str = ""
+_YOLO_MODELS: dict[tuple[str, str], Any] = {}
+_MANGA_TEXT_SEGMENTATION_CACHE: dict[tuple[str, str], Any] = {}
 
 
 def detect_text_regions(page: dict[str, Any], image_file: str | Path | None = None) -> list[dict[str, float]]:
     if image_file:
-        model_boxes = detect_with_rtdetr(Path(image_file))
+        model_boxes = detect_with_configured_model(Path(image_file))
         if model_boxes:
             return model_boxes
 
@@ -53,12 +69,45 @@ def detect_text_regions(page: dict[str, Any], image_file: str | Path | None = No
     ]
 
 
-def detect_with_rtdetr(image_file: Path) -> list[dict[str, float]]:
-    model_id = str(ai_value("rtdetrModelId", "RTDETR_MODEL_ID", "ogkalu/comic-text-and-bubble-detector")).strip()
+def detect_with_configured_model(image_file: Path) -> list[dict[str, float]]:
+    model_id = normalize_detector_model_id(str(ai_value("rtdetrModelId", "RTDETR_MODEL_ID", DEFAULT_DETECTOR_MODEL)).strip())
+    if not model_id:
+        return []
+    try:
+        if model_id == MANGA_TEXT_SEGMENTATION_2025_MODEL:
+            return detect_with_manga_text_segmentation_2025(image_file, model_id)
+        if is_ultralytics_detector(model_id):
+            return detect_with_ultralytics(image_file, model_id)
+        return detect_with_rtdetr(image_file, model_id)
+    except Exception as error:
+        if ai_bool("strictMode", "AI_STRICT"):
+            title = DETECTOR_MODEL_TITLES.get(model_id, model_id)
+            raise RuntimeError(f"{title} çalıştırılamadı: {error}") from error
+        return []
+
+
+def normalize_detector_model_id(model_id: str) -> str:
+    aliases = {
+        "Manga-Text-Segmentation-2025": MANGA_TEXT_SEGMENTATION_2025_MODEL,
+        "manga-text-segmentation-2025": MANGA_TEXT_SEGMENTATION_2025_MODEL,
+        "comic-text-segmenter-yolov8m": "ogkalu/comic-text-segmenter-yolov8m",
+        "manga109-segmentation-bubble": "huyvux3005/manga109-segmentation-bubble",
+    }
+    return aliases.get(model_id, model_id)
+
+
+def is_ultralytics_detector(model_id: str) -> bool:
+    lowered = model_id.lower()
+    return model_id in ULTRALYTICS_DETECTOR_FILES or "yolo" in lowered or lowered.endswith(".pt")
+
+
+def detect_with_rtdetr(image_file: Path, model_id: str | None = None) -> list[dict[str, float]]:
+    model_id = model_id or str(ai_value("rtdetrModelId", "RTDETR_MODEL_ID", DEFAULT_DETECTOR_MODEL)).strip()
+    model_id = normalize_detector_model_id(model_id)
     if not model_id:
         return []
 
-    global _RTDETR_MODEL, _RTDETR_PROCESSOR
+    global _RTDETR_MODEL, _RTDETR_PROCESSOR, _RTDETR_MODEL_ID
     try:
         onnx_boxes = detect_with_rtdetr_onnx(image_file, model_id)
         if onnx_boxes:
@@ -67,10 +116,11 @@ def detect_with_rtdetr(image_file: Path) -> list[dict[str, float]]:
         import torch
         from transformers import AutoImageProcessor, AutoModelForObjectDetection
 
-        if _RTDETR_MODEL is None or _RTDETR_PROCESSOR is None:
+        if _RTDETR_MODEL is None or _RTDETR_PROCESSOR is None or _RTDETR_MODEL_ID != model_id:
             _RTDETR_PROCESSOR = AutoImageProcessor.from_pretrained(model_id)
             _RTDETR_MODEL = AutoModelForObjectDetection.from_pretrained(model_id)
             _RTDETR_MODEL.eval()
+            _RTDETR_MODEL_ID = model_id
 
         image = Image.open(image_file).convert("RGB")
         inputs = _RTDETR_PROCESSOR(images=image, return_tensors="pt")
@@ -91,10 +141,10 @@ def detect_with_rtdetr(image_file: Path) -> list[dict[str, float]]:
         boxes = []
         for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
             label_name = _RTDETR_MODEL.config.id2label.get(int(label), str(int(label))).lower()
-            if allowed_labels and label_name not in allowed_labels:
+            if allowed_labels and not detector_label_allowed(label_name, allowed_labels):
                 continue
             x1, y1, x2, y2 = [float(value) for value in box.tolist()]
-            boxes.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "score": float(score)})
+            boxes.append(clamp_detection_box({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "score": float(score)}, image.size))
         return sorted(boxes, key=lambda item: (item["y"], item["x"]))
     except Exception as error:
         if ai_bool("strictMode", "AI_STRICT"):
@@ -103,18 +153,19 @@ def detect_with_rtdetr(image_file: Path) -> list[dict[str, float]]:
 
 
 def detect_with_rtdetr_onnx(image_file: Path, model_id: str) -> list[dict[str, float]]:
-    global _RTDETR_ONNX, _RTDETR_PROCESSOR
+    global _RTDETR_ONNX, _RTDETR_PROCESSOR, _RTDETR_ONNX_MODEL_ID
     try:
         import numpy as np
         import onnxruntime as ort
         from huggingface_hub import hf_hub_download
         from transformers import AutoImageProcessor
 
-        if _RTDETR_PROCESSOR is None:
+        if _RTDETR_PROCESSOR is None or _RTDETR_ONNX_MODEL_ID != model_id:
             _RTDETR_PROCESSOR = AutoImageProcessor.from_pretrained(model_id)
-        if _RTDETR_ONNX is None:
+        if _RTDETR_ONNX is None or _RTDETR_ONNX_MODEL_ID != model_id:
             onnx_file = hf_hub_download(model_id, "detector.onnx")
             _RTDETR_ONNX = ort.InferenceSession(onnx_file, providers=["CPUExecutionProvider"])
+            _RTDETR_ONNX_MODEL_ID = model_id
 
         image = Image.open(image_file).convert("RGB")
         inputs = _RTDETR_PROCESSOR(images=image, return_tensors="np")
@@ -135,22 +186,206 @@ def detect_with_rtdetr_onnx(image_file: Path, model_id: str) -> list[dict[str, f
         candidates = []
         for label, box, score in zip(labels[0], boxes[0], scores[0]):
             label_name = id2label.get(int(label), str(int(label)))
-            if label_name not in allowed_labels or float(score) < threshold:
+            if not detector_label_allowed(label_name, allowed_labels) or float(score) < threshold:
                 continue
             x1, y1, x2, y2 = [float(value) for value in box]
-            candidates.append(
-                {
-                    "x": max(0, x1),
-                    "y": max(0, y1),
-                    "w": min(float(image.width), x2) - max(0, x1),
-                    "h": min(float(image.height), y2) - max(0, y1),
-                    "score": float(score),
-                    "label": label_name,
-                }
-            )
+            candidates.append(clamp_detection_box({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "score": float(score), "label": label_name}, image.size))
         return sorted(non_max_suppression(candidates), key=lambda item: (item["y"], item["x"]))
     except Exception:
         return []
+
+
+def detect_with_ultralytics(image_file: Path, model_id: str) -> list[dict[str, float]]:
+    from ultralytics import YOLO
+
+    model_path = resolve_ultralytics_model_path(model_id)
+    device = ultralytics_device()
+    cache_key = (model_id, str(model_path))
+    model = _YOLO_MODELS.get(cache_key)
+    if model is None:
+        model = YOLO(str(model_path))
+        _YOLO_MODELS[cache_key] = model
+
+    threshold = float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", 0.55))
+    kwargs = {"source": str(image_file), "conf": threshold, "verbose": False}
+    if device:
+        kwargs["device"] = device
+    results = model.predict(**kwargs)
+    with Image.open(image_file) as image:
+        image_size = image.size
+
+    allowed_labels = detector_allowed_labels()
+    boxes: list[dict[str, float]] = []
+    for result in results:
+        result_boxes = getattr(result, "boxes", None)
+        if result_boxes is None:
+            continue
+        xyxy = result_boxes.xyxy.cpu().numpy().tolist() if getattr(result_boxes, "xyxy", None) is not None else []
+        scores = result_boxes.conf.cpu().numpy().tolist() if getattr(result_boxes, "conf", None) is not None else [1.0] * len(xyxy)
+        classes = result_boxes.cls.cpu().numpy().tolist() if getattr(result_boxes, "cls", None) is not None else [0] * len(xyxy)
+        names = getattr(result, "names", None) or getattr(model, "names", {}) or {}
+        polygons = yolo_mask_polygons(result)
+        for index, box in enumerate(xyxy):
+            label_name = str(names.get(int(classes[index]), int(classes[index]))).lower() if isinstance(names, dict) else str(classes[index])
+            if allowed_labels and not detector_label_allowed(label_name, allowed_labels):
+                continue
+            if index < len(polygons) and len(polygons[index]) > 0:
+                candidate = bbox_from_polygon(polygons[index])
+            else:
+                x1, y1, x2, y2 = [float(value) for value in box]
+                candidate = {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}
+            candidate["score"] = float(scores[index]) if index < len(scores) else 1.0
+            candidate["label"] = label_name
+            boxes.append(clamp_detection_box(candidate, image_size))
+    return sorted(non_max_suppression(boxes), key=lambda item: (item["y"], item["x"]))
+
+
+def resolve_ultralytics_model_path(model_id: str) -> str | Path:
+    local_path = Path(model_id).expanduser()
+    if local_path.exists():
+        return local_path
+    filename = ULTRALYTICS_DETECTOR_FILES.get(model_id)
+    if filename:
+        from huggingface_hub import hf_hub_download
+
+        return hf_hub_download(model_id, filename)
+    return model_id
+
+
+def ultralytics_device() -> str | int:
+    device = str(ai_value("aiDevice", "AI_DEVICE", "cpu")).strip().lower()
+    if device in {"cuda", "gpu"}:
+        return 0
+    return device or "cpu"
+
+
+def yolo_mask_polygons(result: Any) -> list[Any]:
+    masks = getattr(result, "masks", None)
+    polygons = getattr(masks, "xy", None)
+    return list(polygons or [])
+
+
+def bbox_from_polygon(points: Any) -> dict[str, float]:
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+    return {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}
+
+
+def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) -> list[dict[str, float]]:
+    import cv2
+    import numpy as np
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    import segmentation_models_pytorch as smp
+    from huggingface_hub import hf_hub_download
+
+    device_name = str(ai_value("aiDevice", "AI_DEVICE", "cpu")).strip().lower()
+    device = "cuda" if device_name == "cuda" and torch.cuda.is_available() else "cpu"
+    cache_key = (model_id, device)
+    model = _MANGA_TEXT_SEGMENTATION_CACHE.get(cache_key)
+    if model is None:
+        model_path = hf_hub_download(model_id, "model.pth")
+        model = smp.UnetPlusPlus(
+            encoder_name="tu-efficientnetv2_rw_m",
+            encoder_weights=None,
+            in_channels=3,
+            classes=1,
+            activation=None,
+            decoder_attention_type="scse",
+        )
+        convert_batchnorm_to_groupnorm(model.decoder, nn)
+        state_dict = torch.load(model_path, map_location=device)
+        model.load_state_dict(state_dict)
+        model.to(device)
+        model.eval()
+        _MANGA_TEXT_SEGMENTATION_CACHE[cache_key] = model
+
+    with Image.open(image_file).convert("RGB") as source:
+        image = np.array(source)
+        image_size = source.size
+
+    height, width = image.shape[:2]
+    normalized = image.astype("float32") / 255.0
+    normalized = (normalized - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    tensor = torch.from_numpy(normalized.transpose(2, 0, 1)).unsqueeze(0).to(device)
+    pad_h = (32 - height % 32) % 32
+    pad_w = (32 - width % 32) % 32
+    if pad_h or pad_w:
+        tensor = F.pad(tensor, (0, pad_w, 0, pad_h), mode="constant", value=0)
+
+    with torch.no_grad():
+        if device == "cuda":
+            with torch.amp.autocast("cuda"):
+                probs = model(tensor).sigmoid()
+        else:
+            probs = model(tensor).sigmoid()
+    prob_map = probs[0, 0, :height, :width].detach().cpu().numpy()
+    threshold = float(ai_value("rtdetrThreshold", "RTDETR_THRESHOLD", 0.55))
+    mask = (prob_map > threshold).astype(np.uint8) * 255
+    close_size = max(3, min(17, make_odd(int(round(min(width, height) * 0.008)))))
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+    mask = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = max(30, int(width * height * 0.00001))
+    boxes = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w * h < min_area or w < 4 or h < 4:
+            continue
+        pad = max(2, int(round(min(w, h) * 0.12)))
+        boxes.append(clamp_detection_box({"x": x - pad, "y": y - pad, "w": w + pad * 2, "h": h + pad * 2, "score": 1.0, "label": "text"}, image_size))
+    return sorted(non_max_suppression(merge_close_boxes(boxes)), key=lambda item: (item["y"], item["x"]))
+
+
+def convert_batchnorm_to_groupnorm(module: Any, nn_module: Any) -> None:
+    for name, child in module.named_children():
+        if isinstance(child, nn_module.BatchNorm2d):
+            channels = child.num_features
+            groups = 8
+            if channels < groups or channels % groups != 0:
+                groups = next((candidate for candidate in range(min(channels, 8), 1, -1) if channels % candidate == 0), 1)
+            setattr(module, name, nn_module.GroupNorm(num_groups=groups, num_channels=channels))
+        else:
+            convert_batchnorm_to_groupnorm(child, nn_module)
+
+
+def make_odd(value: int) -> int:
+    return value if value % 2 else value + 1
+
+
+def detector_allowed_labels() -> set[str]:
+    return {
+        item.strip().lower()
+        for item in str(ai_value("rtdetrTextLabels", "RTDETR_TEXT_LABELS", "text_bubble,text_free")).split(",")
+        if item.strip()
+    }
+
+
+def detector_label_allowed(label_name: str, allowed_labels: set[str]) -> bool:
+    if not allowed_labels:
+        return True
+    normalized = label_name.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in allowed_labels:
+        return True
+    if "text" in normalized and allowed_labels.intersection({"text_free", "text_bubble"}):
+        return True
+    if "bubble" in normalized and allowed_labels.intersection({"bubble", "text_bubble"}):
+        return True
+    return normalized.isdigit()
+
+
+def clamp_detection_box(box: dict[str, float], image_size: tuple[int, int]) -> dict[str, float]:
+    image_width, image_height = image_size
+    x1 = max(0.0, float(box.get("x", 0)))
+    y1 = max(0.0, float(box.get("y", 0)))
+    x2 = min(float(image_width), x1 + max(0.0, float(box.get("w", 0))))
+    y2 = min(float(image_height), y1 + max(0.0, float(box.get("h", 0))))
+    return {**box, "x": x1, "y": y1, "w": max(0.0, x2 - x1), "h": max(0.0, y2 - y1)}
 
 
 def non_max_suppression(boxes: list[dict[str, float]]) -> list[dict[str, float]]:

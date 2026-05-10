@@ -65,6 +65,18 @@ const DETECT_LABEL_OPTIONS = [
   ["text_bubble", "Balon içi yazılar"],
   ["bubble,text_bubble,text_free", "Balon + yazı"],
 ];
+const DETECTION_MODEL_OPTIONS = [
+  ["ogkalu/comic-text-and-bubble-detector", "RT-DETR V2 text/bubble"],
+  ["ogkalu/comic-text-segmenter-yolov8m", "YOLOv8m text segmenter"],
+  ["huyvux3005/manga109-segmentation-bubble", "Manga109 bubble segmentation"],
+  ["a-b-c-x-y-z/Manga-Text-Segmentation-2025", "Manga Text Segmentation 2025"],
+];
+const DETECTION_MODEL_NOTES = {
+  "ogkalu/comic-text-and-bubble-detector": "Dengeli varsayılan model. Balon içi ve balonsuz yazı kutuları için RT-DETR kullanır.",
+  "ogkalu/comic-text-segmenter-yolov8m": "YOLOv8m segmentasyon modeli. Uzun dikey webtoon sayfalarında daha iyi oran toleransı hedefler.",
+  "huyvux3005/manga109-segmentation-bubble": "YOLO11 tabanlı konuşma balonu segmentasyonu. Kutular maskeden daraltılarak oluşturulur.",
+  "a-b-c-x-y-z/Manga-Text-Segmentation-2025": "Piksel düzeyinde manga metin maskesi üretir. Mevcut editörde maskeler sıkı yazı kutularına çevrilir.",
+};
 const INPAINT_MODEL_OPTIONS = [
   ["lama", "LaMa"],
   ["mat", "MAT"],
@@ -2072,7 +2084,8 @@ function SettingsPage({ settings, fonts, onClose, onSave, onUploadFont }) {
           <section className="settings-section">
             <h3>Algılama ve OCR</h3>
             <div className="settings-grid">
-              <label className="wide">RT-DETR model<SelectWithOptions value={ai.rtdetrModelId} options={[["ogkalu/comic-text-and-bubble-detector", "Comic text detector"]]} onChange={(value) => patchAi({ rtdetrModelId: value })} /></label>
+              <label className="wide">Algılama modeli<SelectWithOptions value={ai.rtdetrModelId} options={DETECTION_MODEL_OPTIONS} onChange={(value) => patchAi({ rtdetrModelId: value })} /></label>
+              <p className="settings-note wide">{DETECTION_MODEL_NOTES[ai.rtdetrModelId] || "Özel model kimliği kullanılacak. Desteklenen RT-DETR, YOLO/Ultralytics veya Manga Text Segmentation biçimlerinden biri olmalı."}</p>
               <label>Algılama modu<SelectWithOptions value={ai.rtdetrTextLabels} options={DETECT_LABEL_OPTIONS} onChange={(value) => patchAi({ rtdetrTextLabels: value })} /></label>
               <label>Eşik<input type="number" min="0.05" max="0.95" step="0.01" value={ai.rtdetrThreshold} onChange={(event) => patchAi({ rtdetrThreshold: Number(event.target.value) })} /></label>
               <label>OCR dili<SelectWithOptions value={ai.ocrLanguage} options={OCR_LANGUAGE_OPTIONS} onChange={(value) => patchAi({ ocrLanguage: value })} /></label>
