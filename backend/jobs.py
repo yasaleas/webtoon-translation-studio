@@ -172,6 +172,8 @@ def ocr(project_id: str, episode_id: str, box_ids: list[str] | None = None) -> d
                 patch = {"sourceText": sanitize_ocr_text(result["text"]) or result["text"], "status": "ocr"}
                 if result.get("corners"):
                     patch["corners"] = result["corners"]
+                if result.get("textPolygons"):
+                    patch["textPolygons"] = result["textPolygons"]
                 update_box(
                     project_id,
                     episode_id,

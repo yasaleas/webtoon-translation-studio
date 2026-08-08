@@ -118,6 +118,7 @@ class TextBox:
     style: dict[str, Any] = field(default_factory=default_text_style)
     corners: dict[str, dict[str, float]] = field(default_factory=default_warp_corners)
     placement: dict[str, float] = field(default_factory=lambda: {"x": 0.5, "y": 0.5})
+    textPolygons: list[list[tuple[float, float]]] = field(default_factory=list)
 
 
 @dataclass
@@ -919,11 +920,23 @@ def restore_box_from_original(project_id: str, episode_id: str, box_id: str) -> 
     history = begin_image_history(project_id, episode_id, box["pageId"], "box-restore", {"boxId": box_id})
     backup_image(project_id, episode_id, box["pageId"])
     with Image.open(edited_path) as edited_image:
+        from PIL import ImageFilter
+
         edited = edited_image.convert("RGBA")
         original = original_canvas_for_page(project_id, episode_id, box["pageId"], edited.size, state)
         left, top, right, bottom = clamped_box(box["bbox"], min(edited.width, original.width), min(edited.height, original.height))
         restored_region = original.crop((left, top, right, bottom))
-        if has_custom_box_corners(box):
+        text_polygons = box.get("textPolygons")
+        if text_polygons:
+            poly_mask = Image.new("L", edited.size, 0)
+            draw = ImageDraw.Draw(poly_mask)
+            for poly in text_polygons:
+                if len(poly) >= 3:
+                    draw.polygon([(float(x), float(y)) for x, y in poly], fill=255)
+            poly_mask = poly_mask.filter(ImageFilter.MaxFilter(size=7))
+            cropped_mask = poly_mask.crop((left, top, right, bottom))
+            edited.paste(restored_region, (left, top), cropped_mask)
+        elif has_custom_box_corners(box):
             mask = polygon_mask_for_box(box, edited.size).crop((left, top, right, bottom))
             edited.paste(restored_region, (left, top), mask)
         else:

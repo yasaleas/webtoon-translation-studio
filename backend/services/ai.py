@@ -312,6 +312,7 @@ def bbox_from_polygon(points: Any) -> dict[str, float]:
 
 
 def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) -> list[dict[str, float]]:
+    import gc
     import cv2
     import numpy as np
     import torch
@@ -342,8 +343,17 @@ def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) ->
         _MANGA_TEXT_SEGMENTATION_CACHE[cache_key] = model
 
     with Image.open(image_file).convert("RGB") as source:
-        image = np.array(source)
         image_size = source.size
+        orig_w, orig_h = image_size
+        max_dim = 2048
+        if max(orig_w, orig_h) > max_dim:
+            scale = max_dim / float(max(orig_w, orig_h))
+            scaled_w = max(32, int(round(orig_w * scale)))
+            scaled_h = max(32, int(round(orig_h * scale)))
+            scaled_image = source.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR)
+            image = np.array(scaled_image)
+        else:
+            image = np.array(source)
 
     height, width = image.shape[:2]
     normalized = image.astype("float32") / 255.0
@@ -354,13 +364,29 @@ def detect_with_manga_text_segmentation_2025(image_file: Path, model_id: str) ->
     if pad_h or pad_w:
         tensor = F.pad(tensor, (0, pad_w, 0, pad_h), mode="constant", value=0)
 
-    with torch.no_grad():
-        if device == "cuda":
-            with torch.amp.autocast("cuda"):
+    try:
+        with torch.no_grad():
+            if device == "cuda":
+                with torch.amp.autocast("cuda"):
+                    probs = model(tensor).sigmoid()
+            else:
                 probs = model(tensor).sigmoid()
-        else:
-            probs = model(tensor).sigmoid()
-    prob_map = probs[0, 0, :height, :width].detach().cpu().numpy()
+        prob_map_scaled = probs[0, 0, :height, :width].detach().cpu().numpy()
+    finally:
+        del tensor
+        if "probs" in locals():
+            del probs
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    if (orig_w, orig_h) != (width, height):
+        prob_map = cv2.resize(prob_map_scaled, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+        width, height = orig_h, orig_w  # opencv shape convention
+        width, height = orig_w, orig_h
+    else:
+        prob_map = prob_map_scaled
+
     threshold = detector_threshold(model_id)
     mask = (prob_map > threshold).astype(np.uint8) * 255
     close_size = max(3, min(17, make_odd(int(round(min(width, height) * 0.008)))))
@@ -637,6 +663,18 @@ def run_ocr_with_geometry(image_file: str | Path, box: dict[str, Any]) -> dict[s
         result: dict[str, Any] = {"text": text}
         if corners:
             result["corners"] = corners
+        bbox = box.get("bbox") or {}
+        box_left = max(0, float(bbox.get("x", 0)))
+        box_top = max(0, float(bbox.get("y", 0)))
+        polygons = analysis.get("polygons") or []
+        if polygons:
+            global_polygons = [
+                [(float(pt[0] + box_left), float(pt[1] + box_top)) for pt in poly]
+                for poly in polygons
+                if len(poly) >= 3
+            ]
+            if global_polygons:
+                result["textPolygons"] = global_polygons
         return result
     finally:
         crop_file.unlink(missing_ok=True)
@@ -1461,11 +1499,22 @@ def save_inpaint_output(produced: Path, image_file: Path) -> None:
 
 
 def create_mask(image_file: Path, mask_file: Path, box: dict[str, Any]) -> None:
+    from PIL import ImageFilter
+
     with Image.open(image_file) as image:
         mask = Image.new("L", image.size, 0)
         draw = ImageDraw.Draw(mask)
         pad = int(ai_value("inpaintPadding", "INPAINT_PADDING", 8))
-        if ai_bool("inpaintPerspectiveMask", "INPAINT_PERSPECTIVE_MASK", True) and has_custom_box_corners(box):
+        text_polygons = box.get("textPolygons")
+        if text_polygons:
+            for poly in text_polygons:
+                if len(poly) >= 3:
+                    draw.polygon([(float(x), float(y)) for x, y in poly], fill=255)
+            filter_size = max(3, pad * 2 + 1)
+            if filter_size % 2 == 0:
+                filter_size += 1
+            mask = mask.filter(ImageFilter.MaxFilter(size=filter_size))
+        elif ai_bool("inpaintPerspectiveMask", "INPAINT_PERSPECTIVE_MASK", True) and has_custom_box_corners(box):
             draw.polygon(expanded_box_points(box, pad), fill=255)
         else:
             bbox = box["bbox"] if "bbox" in box else box
