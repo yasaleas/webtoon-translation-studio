@@ -428,7 +428,7 @@ def update_box(project_id: str, episode_id: str, box_id: str, patch: dict[str, A
     for box in state["boxes"]:
         if box["id"] == box_id:
             for key, value in patch.items():
-                if key in {"bbox", "corners", "sourceText", "translatedText", "status", "style", "placement", "order"}:
+                if key in {"bbox", "corners", "sourceText", "translatedText", "status", "style", "placement", "order", "textPolygons"}:
                     box[key] = normalized_box_corners({"bbox": box.get("bbox", {}), "corners": value}) if key == "corners" else value
             renumber_boxes(state)
             save_state(project_id, episode_id, state)

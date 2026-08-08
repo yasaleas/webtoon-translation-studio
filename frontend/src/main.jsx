@@ -1637,6 +1637,7 @@ function PageCanvas({
               }}
             >
               {hasCustomWarp(resolvedBoxCorners(box)) && warpEditBoxId !== box.id ? <SelectionShape box={box} /> : null}
+              {box.textPolygons?.length && warpEditBoxId !== box.id && box.status !== "placed" ? <TextPolygonsShape box={box} /> : null}
               {box.translatedText && box.status === "placed" ? <TextPreview box={box} fonts={fonts} /> : null}
               {warpEditBoxId === box.id ? (
                 <WarpControls
@@ -1782,6 +1783,24 @@ function SelectionShape({ box }) {
   return (
     <svg className="shape-outline" viewBox={`0 0 ${box.bbox.w} ${box.bbox.h}`} preserveAspectRatio="none">
       <polygon points={points.map((point) => `${point.x},${point.y}`).join(" ")} />
+    </svg>
+  );
+}
+
+function TextPolygonsShape({ box }) {
+  const polygons = box.textPolygons || [];
+  if (!polygons.length) return null;
+  return (
+    <svg className="text-polygons-shape" viewBox={`0 0 ${box.bbox.w} ${box.bbox.h}`} preserveAspectRatio="none">
+      {polygons.map((poly, index) => {
+        const points = poly.map(([px, py]) => `${(px - box.bbox.x).toFixed(1)},${(py - box.bbox.y).toFixed(1)}`).join(" ");
+        return (
+          <polygon
+            key={index}
+            points={points}
+          />
+        );
+      })}
     </svg>
   );
 }
