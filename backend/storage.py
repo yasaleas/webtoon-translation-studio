@@ -29,6 +29,7 @@ from .fonts import font_path
 from .settings import editor_value
 
 STATE_LOCK = RLock()
+RESLICE_LOCK = RLock()
 MANUAL_MASK_DIR_NAME = "manual_masks"
 HISTORY_DIR_NAME = "history"
 NEAREST_RESAMPLE = getattr(Image, "Resampling", Image).NEAREST
@@ -732,105 +733,106 @@ def find_natural_split_points(image: Image.Image, target_height: int = 2800, sea
 
 def smart_reslice_episode(project_id: str, episode_id: str, target_height: int = 2800) -> dict[str, Any]:
     """Bölüm sayfalarını birleştirip panellerin doğal boşluklarından bölerek yeniden dilimler."""
-    layout = ensure_episode_layout(project_id, episode_id)
-    original_dir = find_original_dir(layout)
-    edited_dir = layout / EDITED_DIR_NAME
+    with RESLICE_LOCK:
+        layout = ensure_episode_layout(project_id, episode_id)
+        original_dir = find_original_dir(layout)
+        edited_dir = layout / EDITED_DIR_NAME
 
-    # 1. En temiz kaynak görselleri topla
-    # Eğer daha önce alınmış bir ilk ham yedek varsa oradan başla
-    backup_dirs = sorted(
-        [d for d in (layout / BACKUP_DIR_NAME).iterdir() if d.is_dir() and d.name.startswith("reslice_")],
-        key=lambda d: d.name,
-    )
-    source_dir = edited_dir
-    if backup_dirs and (backup_dirs[0] / "original").exists() and list((backup_dirs[0] / "original").iterdir()):
-        source_dir = backup_dirs[0] / "original"
+        # 1. En temiz kaynak görselleri topla
+        # Eğer daha önce alınmış bir ilk ham yedek varsa oradan başla
+        backup_dirs = sorted(
+            [d for d in (layout / BACKUP_DIR_NAME).iterdir() if d.is_dir() and d.name.startswith("reslice_")],
+            key=lambda d: d.name,
+        )
+        source_dir = edited_dir
+        if backup_dirs and (backup_dirs[0] / "original").exists() and list((backup_dirs[0] / "original").iterdir()):
+            source_dir = backup_dirs[0] / "original"
 
-    all_files = sorted(
-        [f for f in source_dir.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS],
-        key=lambda p: natural_key(p.name),
-    )
-    if not all_files:
         all_files = sorted(
-            [f for f in original_dir.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS],
+            [f for f in source_dir.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS],
             key=lambda p: natural_key(p.name),
         )
+        if not all_files:
+            all_files = sorted(
+                [f for f in original_dir.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS],
+                key=lambda p: natural_key(p.name),
+            )
 
-    if not all_files:
-        raise ValueError("Dilimlenecek sayfa bulunamadı.")
+        if not all_files:
+            raise ValueError("Dilimlenecek sayfa bulunamadı.")
 
-    # Mükerrer stem tekilleştirme (örnek: hem 001.jpg hem 001.png varsa yalnızca 1 tanesini al)
-    unique_files = []
-    seen_stems = set()
-    for f in all_files:
-        stem = f.stem.lower()
-        if stem not in seen_stems:
-            seen_stems.add(stem)
-            unique_files.append(f)
+        # Mükerrer stem tekilleştirme (örnek: hem 001.jpg hem 001.png varsa yalnızca 1 tanesini al)
+        unique_files = []
+        seen_stems = set()
+        for f in all_files:
+            stem = f.stem.lower()
+            if stem not in seen_stems:
+                seen_stems.add(stem)
+                unique_files.append(f)
 
-    images = []
-    for f in unique_files:
-        try:
-            with Image.open(f) as img:
-                images.append(img.convert("RGBA"))
-        except Exception:
-            pass
+        images = []
+        for f in unique_files:
+            try:
+                with Image.open(f) as img:
+                    images.append(img.convert("RGBA"))
+            except Exception:
+                pass
 
-    if not images:
-        raise ValueError("Geçerli sayfa görselleri okunamadı.")
+        if not images:
+            raise ValueError("Geçerli sayfa görselleri okunamadı.")
 
-    max_w = max(img.width for img in images)
-    total_h = sum(img.height for img in images)
-    full_canvas = Image.new("RGBA", (max_w, total_h), (255, 255, 255, 255))
+        max_w = max(img.width for img in images)
+        total_h = sum(img.height for img in images)
+        full_canvas = Image.new("RGBA", (max_w, total_h), (255, 255, 255, 255))
 
-    curr_y = 0
-    for img in images:
-        full_canvas.alpha_composite(img, (0, curr_y))
-        curr_y += img.height
+        curr_y = 0
+        for img in images:
+            full_canvas.alpha_composite(img, (0, curr_y))
+            curr_y += img.height
 
-    # 2. Doğal panel boşluklarını bul
-    split_points = find_natural_split_points(full_canvas, target_height=target_height)
+        # 2. Doğal panel boşluklarını bul
+        split_points = find_natural_split_points(full_canvas, target_height=target_height)
 
-    # 3. Yedek al ve hem orijinal hem de düzenlenmiş klasörlerindeki tüm eski sayfaları tamamen temizle
-    backup_root = episode_path(project_id, episode_id) / BACKUP_DIR_NAME / f"reslice_{uuid4().hex}"
-    backup_edited = backup_root / "edited"
-    backup_orig = backup_root / "original"
-    backup_edited.mkdir(parents=True, exist_ok=True)
-    backup_orig.mkdir(parents=True, exist_ok=True)
+        # 3. Yedek al ve hem orijinal hem de düzenlenmiş klasörlerindeki tüm eski sayfaları tamamen temizle
+        backup_root = episode_path(project_id, episode_id) / BACKUP_DIR_NAME / f"reslice_{uuid4().hex}"
+        backup_edited = backup_root / "edited"
+        backup_orig = backup_root / "original"
+        backup_edited.mkdir(parents=True, exist_ok=True)
+        backup_orig.mkdir(parents=True, exist_ok=True)
 
-    for f in list(edited_dir.iterdir()):
-        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
-            shutil.copy2(f, backup_edited / f.name)
-            f.unlink()
+        for f in list(edited_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
+                shutil.copy2(f, backup_edited / f.name)
+                f.unlink()
 
-    for f in list(original_dir.iterdir()):
-        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
-            shutil.copy2(f, backup_orig / f.name)
-            f.unlink()
+        for f in list(original_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
+                shutil.copy2(f, backup_orig / f.name)
+                f.unlink()
 
-    # 4. Yeni sayfaları dilimle ve hem orijinal hem düzenlenmiş klasörlerine kaydet
-    new_pages = []
-    start_y = 0
-    for idx, end_y in enumerate(split_points, start=1):
-        slice_img = full_canvas.crop((0, start_y, max_w, end_y))
-        filename = f"{idx:03d}.png"
-        out_path = edited_dir / filename
-        orig_out_path = original_dir / filename
-        slice_img.save(out_path, format="PNG")
-        slice_img.save(orig_out_path, format="PNG")
-        new_pages.append({"id": filename, "width": max_w, "height": end_y - start_y})
-        start_y = end_y
+        # 4. Yeni sayfaları dilimle ve hem orijinal hem düzenlenmiş klasörlerine kaydet
+        new_pages = []
+        start_y = 0
+        for idx, end_y in enumerate(split_points, start=1):
+            slice_img = full_canvas.crop((0, start_y, max_w, end_y))
+            filename = f"{idx:03d}.png"
+            out_path = edited_dir / filename
+            orig_out_path = original_dir / filename
+            slice_img.save(out_path, format="PNG")
+            slice_img.save(orig_out_path, format="PNG")
+            new_pages.append({"id": filename, "width": max_w, "height": end_y - start_y})
+            start_y = end_y
 
-    # 5. State'i temizle/sıfırla
-    state = default_state()
-    save_state(project_id, episode_id, state)
+        # 5. State'i temizle/sıfırla
+        state = default_state()
+        save_state(project_id, episode_id, state)
 
-    return {
-        "success": True,
-        "previousPageCount": len(unique_files),
-        "newPageCount": len(new_pages),
-        "message": f"Bölüm {len(new_pages)} sayfaya doğal panel boşluklarından başarıyla dilimlendi.",
-    }
+        return {
+            "success": True,
+            "previousPageCount": len(unique_files),
+            "newPageCount": len(new_pages),
+            "message": f"Bölüm {len(new_pages)} sayfaya doğal panel boşluklarından başarıyla dilimlendi.",
+        }
 
 
 def begin_image_history(
