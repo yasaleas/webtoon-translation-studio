@@ -760,15 +760,24 @@ def smart_reslice_episode(project_id: str, episode_id: str, target_height: int =
     # 2. Doğal panel boşluklarını bul
     split_points = find_natural_split_points(full_canvas, target_height=target_height)
 
-    # 3. Yedek al ve eski sayfaları temizle
+    # 3. Yedek al ve hem orijinal hem de düzenlenmiş klasörlerindeki eski sayfaları temizle
     backup_root = episode_path(project_id, episode_id) / BACKUP_DIR_NAME / f"reslice_{uuid4().hex}"
-    backup_root.mkdir(parents=True, exist_ok=True)
+    backup_edited = backup_root / "edited"
+    backup_orig = backup_root / "original"
+    backup_edited.mkdir(parents=True, exist_ok=True)
+    backup_orig.mkdir(parents=True, exist_ok=True)
+
     for f in edited_dir.iterdir():
-        if f.is_file():
-            shutil.copy2(f, backup_root / f.name)
+        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
+            shutil.copy2(f, backup_edited / f.name)
             f.unlink()
 
-    # 4. Yeni sayfaları dilimle ve kaydet
+    for f in original_dir.iterdir():
+        if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
+            shutil.copy2(f, backup_orig / f.name)
+            f.unlink()
+
+    # 4. Yeni sayfaları dilimle ve hem orijinal hem düzenlenmiş klasörlerine kaydet
     new_pages = []
     start_y = 0
     for idx, end_y in enumerate(split_points, start=1):
@@ -777,8 +786,7 @@ def smart_reslice_episode(project_id: str, episode_id: str, target_height: int =
         out_path = edited_dir / filename
         orig_out_path = original_dir / filename
         slice_img.save(out_path, format="PNG")
-        if not orig_out_path.exists():
-            slice_img.save(orig_out_path, format="PNG")
+        slice_img.save(orig_out_path, format="PNG")
         new_pages.append({"id": filename, "width": max_w, "height": end_y - start_y})
         start_y = end_y
 
