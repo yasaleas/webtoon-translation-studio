@@ -1617,6 +1617,9 @@ def clamp_float(value: Any, minimum: float, maximum: float, fallback: float) -> 
     return min(max(parsed, minimum), maximum)
 
 
+_INPAINT_WARMED_UP: bool = False
+
+
 def is_detector_loaded() -> bool:
     global _RTDETR_MODEL, _RTDETR_ONNX, _YOLO_MODELS, _MANGA_TEXT_SEGMENTATION_CACHE
     return bool(_RTDETR_MODEL is not None or _RTDETR_ONNX is not None or _YOLO_MODELS or _MANGA_TEXT_SEGMENTATION_CACHE)
@@ -1625,6 +1628,11 @@ def is_detector_loaded() -> bool:
 def is_ocr_loaded() -> bool:
     global _OCR_PIPELINE, _OCR_GEOMETRY_PIPELINE
     return bool(_OCR_PIPELINE is not None or _OCR_GEOMETRY_PIPELINE is not None)
+
+
+def is_inpaint_loaded() -> bool:
+    global _INPAINT_WARMED_UP
+    return _INPAINT_WARMED_UP
 
 
 def preload_detector_model(model_id: str | None = None) -> dict[str, Any]:
@@ -1645,6 +1653,20 @@ def preload_ocr_model() -> dict[str, Any]:
         dummy_img.save(dummy_path)
         run_paddleocr_analysis(dummy_path)
     return {"status": "loaded", "model": MODEL_REGISTRY["ocr"]}
+
+
+def preload_inpaint_model() -> dict[str, Any]:
+    global _INPAINT_WARMED_UP
+    dummy_img = Image.new("RGB", (64, 64), "white")
+    dummy_mask = Image.new("L", (64, 64), 0)
+    with TemporaryDirectory() as temp_dir:
+        img_path = Path(temp_dir) / "dummy.png"
+        mask_path = Path(temp_dir) / "mask.png"
+        dummy_img.save(img_path)
+        dummy_mask.save(mask_path)
+        run_iopaint(img_path, mask_path)
+    _INPAINT_WARMED_UP = True
+    return {"status": "loaded", "model": str(ai_value("inpaintModel", "IOPAINT_MODEL", "lama"))}
 
 
 def unload_detector_model() -> dict[str, Any]:
@@ -1686,6 +1708,21 @@ def unload_ocr_model() -> dict[str, Any]:
     return {"status": "unloaded", "model": "ocr"}
 
 
+def unload_inpaint_model() -> dict[str, Any]:
+    global _INPAINT_WARMED_UP
+    import gc
+
+    _INPAINT_WARMED_UP = False
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    gc.collect()
+    return {"status": "unloaded", "model": "inpaint"}
+
+
 def get_ai_models_status() -> dict[str, Any]:
     detector_info = current_detector_model_info()
     return {
@@ -1700,6 +1737,7 @@ def get_ai_models_status() -> dict[str, Any]:
             "lang": str(ai_value("ocrLanguage", "OCR_LANG", "en")),
         },
         "inpaint": {
+            "loaded": is_inpaint_loaded(),
             "model": str(ai_value("inpaintModel", "IOPAINT_MODEL", "lama")),
             "device": str(ai_value("aiDevice", "AI_DEVICE", "cpu")),
         },

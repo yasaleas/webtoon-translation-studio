@@ -11,8 +11,10 @@ from .project_metadata import download_cover, fetch_and_store_project_metadata, 
 from .services.ai import (
     get_ai_models_status,
     preload_detector_model,
+    preload_inpaint_model,
     preload_ocr_model,
     unload_detector_model,
+    unload_inpaint_model,
     unload_ocr_model,
 )
 from .settings import public_settings, save_settings
@@ -89,6 +91,8 @@ def create_app() -> Flask:
             return jsonify(preload_detector_model(payload.get("modelId")))
         elif target == "ocr":
             return jsonify(preload_ocr_model())
+        elif target == "inpaint":
+            return jsonify(preload_inpaint_model())
         return {"error": f"Bilinmeyen model tipi: {target}"}, 400
 
     @app.post("/api/models/unload")
@@ -99,10 +103,13 @@ def create_app() -> Flask:
             return jsonify(unload_detector_model())
         elif target == "ocr":
             return jsonify(unload_ocr_model())
+        elif target == "inpaint":
+            return jsonify(unload_inpaint_model())
         elif target == "all":
             res_d = unload_detector_model()
             res_o = unload_ocr_model()
-            return jsonify({"status": "unloaded", "detector": res_d, "ocr": res_o})
+            res_i = unload_inpaint_model()
+            return jsonify({"status": "unloaded", "detector": res_d, "ocr": res_o, "inpaint": res_i})
         return {"error": f"Bilinmeyen model tipi: {target}"}, 400
 
     @app.get("/api/fonts")

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 """
 Webtoon Translation Studio - Masaüstü Kontrol Paneli & Launcher
-Backend, Frontend, Bağımsız AI Modelleri ve Sistem Bakım Yönetimi
+Backend, Frontend, Bağımsız AI Modelleri (Tespit, OCR, IOPaint) ve Sistem Yönetimi
 """
 
 from __future__ import annotations
@@ -59,6 +59,7 @@ ACCENT_GREEN = "#45d483"
 ACCENT_RED = "#ff5c5c"
 ACCENT_BLUE = "#38bdf8"
 ACCENT_ORANGE = "#fb923c"
+ACCENT_PURPLE = "#c084fc"
 
 
 class ProcessManager:
@@ -185,15 +186,12 @@ class ControlPanelApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Webtoon Translation Studio — Kontrol Paneli")
-        self.geometry("980x760")
-        self.minsize(880, 640)
+        self.geometry("1020x800")
+        self.minsize(920, 680)
         self.configure(bg=BG_DARK)
 
         self.log_queue: queue.Queue = queue.Queue()
         self.manager = ProcessManager(self.log_queue)
-
-        self.auto_scroll_backend = tk.BooleanVar(value=True)
-        self.auto_scroll_frontend = tk.BooleanVar(value=True)
 
         self._setup_styles()
         self._build_ui()
@@ -288,40 +286,55 @@ class ControlPanelApp(tk.Tk):
         self.btn_kill_ai = self._create_btn(c3, "🛑 Takılan İşi Durdur", self._kill_ai_tasks, bg="#581c1c", fg="#fca5a5")
         self.btn_kill_ai.pack(fill="x")
 
-        # 3. YENİ: Bağımsız AI Model Yöneticisi Kartları (2 Kolon)
+        # 3. YENİ: Bağımsız AI Model Yöneticisi Kartları (3 Kolon)
         ai_models_frame = tk.LabelFrame(self, text=" 🧠 Yapay Zeka Modelleri (Ayrı Ayrı Başlat / Bellekten Boşalt) ", bg=BG_CARD, fg=ACCENT_GOLD, font=("Inter", 9, "bold"), padx=10, pady=6, relief="solid", bd=1)
         ai_models_frame.pack(fill="x", padx=14, pady=4)
-        ai_models_frame.columnconfigure((0, 1), weight=1, uniform="ai_card")
+        ai_models_frame.columnconfigure((0, 1, 2), weight=1, uniform="ai_card")
 
         # Model 1: Yazı / Balon Tespiti
         m1 = tk.Frame(ai_models_frame, bg=BG_INPUT, padx=8, pady=6, bd=1, relief="solid")
-        m1.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        m1.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
 
-        tk.Label(m1, text="🔍 Yazı / Balon Tespit Modeli", bg=BG_INPUT, fg=TEXT_MAIN, font=("Inter", 9, "bold")).pack(anchor="w")
+        tk.Label(m1, text="🔍 Yazı / Balon Tespiti", bg=BG_INPUT, fg=TEXT_MAIN, font=("Inter", 9, "bold")).pack(anchor="w")
         self.lbl_detector_model_status = tk.Label(m1, text="⚪ Bellekte Yok (Boşta)", bg=BG_INPUT, fg=TEXT_MUTED, font=("Inter", 8))
         self.lbl_detector_model_status.pack(anchor="w", pady=(1, 4))
 
         m1_btns = tk.Frame(m1, bg=BG_INPUT)
         m1_btns.pack(fill="x")
-        self.btn_preload_detector = self._create_btn(m1_btns, "⚡ Modeli Başlat (Yükle)", lambda: self._preload_single_model("detector"), bg="#1e3a29", fg="#86efac", font=("Inter", 8, "bold"))
-        self.btn_preload_detector.pack(side="left", fill="x", expand=True, padx=(0, 3))
-        self.btn_unload_detector = self._create_btn(m1_btns, "🗑️ Bellekten Boşalt", lambda: self._unload_single_model("detector"), bg="#3b1d1d", fg="#fca5a5", font=("Inter", 8))
+        self.btn_preload_detector = self._create_btn(m1_btns, "⚡ Başlat", lambda: self._preload_single_model("detector"), bg="#1e3a29", fg="#86efac", font=("Inter", 8, "bold"))
+        self.btn_preload_detector.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.btn_unload_detector = self._create_btn(m1_btns, "🗑️ Boşalt", lambda: self._unload_single_model("detector"), bg="#3b1d1d", fg="#fca5a5", font=("Inter", 8))
         self.btn_unload_detector.pack(side="left", fill="x", expand=True)
 
         # Model 2: OCR Okuma Modeli
         m2 = tk.Frame(ai_models_frame, bg=BG_INPUT, padx=8, pady=6, bd=1, relief="solid")
-        m2.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        m2.grid(row=0, column=1, sticky="nsew", padx=2)
 
-        tk.Label(m2, text="📖 OCR Metin Okuma Modeli", bg=BG_INPUT, fg=TEXT_MAIN, font=("Inter", 9, "bold")).pack(anchor="w")
+        tk.Label(m2, text="📖 OCR Metin Okuma", bg=BG_INPUT, fg=TEXT_MAIN, font=("Inter", 9, "bold")).pack(anchor="w")
         self.lbl_ocr_model_status = tk.Label(m2, text="⚪ Bellekte Yok (Boşta)", bg=BG_INPUT, fg=TEXT_MUTED, font=("Inter", 8))
         self.lbl_ocr_model_status.pack(anchor="w", pady=(1, 4))
 
         m2_btns = tk.Frame(m2, bg=BG_INPUT)
         m2_btns.pack(fill="x")
-        self.btn_preload_ocr = self._create_btn(m2_btns, "⚡ Modeli Başlat (Yükle)", lambda: self._preload_single_model("ocr"), bg="#1e3a29", fg="#86efac", font=("Inter", 8, "bold"))
-        self.btn_preload_ocr.pack(side="left", fill="x", expand=True, padx=(0, 3))
-        self.btn_unload_ocr = self._create_btn(m2_btns, "🗑️ Bellekten Boşalt", lambda: self._unload_single_model("ocr"), bg="#3b1d1d", fg="#fca5a5", font=("Inter", 8))
+        self.btn_preload_ocr = self._create_btn(m2_btns, "⚡ Başlat", lambda: self._preload_single_model("ocr"), bg="#1e3a29", fg="#86efac", font=("Inter", 8, "bold"))
+        self.btn_preload_ocr.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.btn_unload_ocr = self._create_btn(m2_btns, "🗑️ Boşalt", lambda: self._unload_single_model("ocr"), bg="#3b1d1d", fg="#fca5a5", font=("Inter", 8))
         self.btn_unload_ocr.pack(side="left", fill="x", expand=True)
+
+        # Model 3: IOPaint Temizleme / Silme Modeli
+        m3 = tk.Frame(ai_models_frame, bg=BG_INPUT, padx=8, pady=6, bd=1, relief="solid")
+        m3.grid(row=0, column=2, sticky="nsew", padx=(3, 0))
+
+        tk.Label(m3, text="🎨 IOPaint Temizleme", bg=BG_INPUT, fg=TEXT_MAIN, font=("Inter", 9, "bold")).pack(anchor="w")
+        self.lbl_inpaint_model_status = tk.Label(m3, text="⚪ Bellekte Yok (Boşta)", bg=BG_INPUT, fg=TEXT_MUTED, font=("Inter", 8))
+        self.lbl_inpaint_model_status.pack(anchor="w", pady=(1, 4))
+
+        m3_btns = tk.Frame(m3, bg=BG_INPUT)
+        m3_btns.pack(fill="x")
+        self.btn_preload_inpaint = self._create_btn(m3_btns, "⚡ Başlat", lambda: self._preload_single_model("inpaint"), bg="#1e3a29", fg="#86efac", font=("Inter", 8, "bold"))
+        self.btn_preload_inpaint.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        self.btn_unload_inpaint = self._create_btn(m3_btns, "🗑️ Boşalt", lambda: self._unload_single_model("inpaint"), bg="#3b1d1d", fg="#fca5a5", font=("Inter", 8))
+        self.btn_unload_inpaint.pack(side="left", fill="x", expand=True)
 
         # 4. Ortak Aksiyon Butonları & Bakım Araçları
         quick_actions = tk.Frame(self, bg=BG_DARK)
@@ -459,15 +472,17 @@ class ControlPanelApp(tk.Tk):
         self.log_queue.put(("backend", f"[BİLGİ] {count} aktif AI alt süreci durduruldu.\n"))
         messagebox.showinfo("AI Durduruldu", f"{count} adet arka plan AI/model süreci sonlandırıldı.")
 
-    # ─── YENİ: Bağımsız Model Preload / Unload Metodları ───────────────────────
+    # ─── Bağımsız Model Preload / Unload Metodları ─────────────────────────────
 
     def _preload_single_model(self, model_type: str) -> None:
         if not self.manager.is_backend_running():
             messagebox.showwarning("Backend Kapalı", "Modeli yüklemek için önce Backend API servisini başlatmalısınız.")
             return
 
+        label_map = {"detector": "Tespit Modeli", "ocr": "OCR Modeli", "inpaint": "IOPaint Modeli"}
+        model_label = label_map.get(model_type, model_type.upper())
+
         def worker():
-            model_label = "Tespit Modeli" if model_type == "detector" else "OCR Modeli"
             self.log_queue.put(("backend", f"[AI] {model_label} belleğe yükleniyor (Isıtma)...\n"))
             try:
                 req = urllib.request.Request(
@@ -475,7 +490,7 @@ class ControlPanelApp(tk.Tk):
                     data=json.dumps({"model": model_type}).encode("utf-8"),
                     headers={"Content-Type": "application/json", "User-Agent": "ControlPanel"},
                 )
-                with urllib.request.urlopen(req, timeout=45) as resp:
+                with urllib.request.urlopen(req, timeout=60) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     self.log_queue.put(("backend", f"[AI BAŞARILI] {model_label} yüklendi ve hazır: {data.get('model', '')}\n"))
             except Exception as error:
@@ -488,8 +503,10 @@ class ControlPanelApp(tk.Tk):
             messagebox.showwarning("Backend Kapalı", "Backend servisi çalışmıyor.")
             return
 
+        label_map = {"detector": "Tespit Modeli", "ocr": "OCR Modeli", "inpaint": "IOPaint Modeli"}
+        model_label = label_map.get(model_type, model_type.upper())
+
         def worker():
-            model_label = "Tespit Modeli" if model_type == "detector" else "OCR Modeli"
             self.log_queue.put(("backend", f"[AI] {model_label} bellekten boşaltılıyor (RAM temizliği)...\n"))
             try:
                 req = urllib.request.Request(
@@ -593,19 +610,22 @@ class ControlPanelApp(tk.Tk):
             ram_text = f"RAM: %{mem.percent} ({mem.used // (1024**2)} MB / {mem.total // (1024**2)} MB)"
             cpu_text = f"CPU: %{psutil.cpu_percent(interval=None)}"
 
-        # 4. AI İş Kuyruğu Durumu & Model Preload Durumları
+        # 4. AI İş Kuyruğu & 3 Model Preload Durumu
         job_status_text = "İş Kuyruğu: Boşta"
         detector_status_text = "⚪ Bellekte Yok (Boşta)"
         detector_color = TEXT_MUTED
         ocr_status_text = "⚪ Bellekte Yok (Boşta)"
         ocr_color = TEXT_MUTED
+        inpaint_status_text = "⚪ Bellekte Yok (Boşta)"
+        inpaint_color = TEXT_MUTED
 
         if backend_alive:
             try:
-                # Modellerin canlı durumunu çek
                 req_models = urllib.request.Request(BACKEND_MODELS_STATUS_URL, headers={"User-Agent": "ControlPanel"})
                 with urllib.request.urlopen(req_models, timeout=1.5) as resp_m:
                     m_data = json.loads(resp_m.read().decode("utf-8"))
+
+                    # Tespit
                     det = m_data.get("detector", {})
                     if det.get("loaded"):
                         detector_status_text = f"🟢 Hazır ({det.get('activeModel', 'Tespit')})"
@@ -614,6 +634,7 @@ class ControlPanelApp(tk.Tk):
                         detector_status_text = f"⚪ Bellekte Yok ({det.get('activeModel', 'Tespit')})"
                         detector_color = TEXT_MUTED
 
+                    # OCR
                     ocr_info = m_data.get("ocr", {})
                     if ocr_info.get("loaded"):
                         ocr_status_text = f"🟢 Hazır ({ocr_info.get('activeModel', 'PaddleOCR')})"
@@ -621,6 +642,15 @@ class ControlPanelApp(tk.Tk):
                     else:
                         ocr_status_text = f"⚪ Bellekte Yok ({ocr_info.get('activeModel', 'PaddleOCR')})"
                         ocr_color = TEXT_MUTED
+
+                    # IOPaint
+                    inp_info = m_data.get("inpaint", {})
+                    if inp_info.get("loaded"):
+                        inpaint_status_text = f"🟢 Hazır (IOPaint {inp_info.get('model', 'lama').upper()})"
+                        inpaint_color = ACCENT_GREEN
+                    else:
+                        inpaint_status_text = f"⚪ Bellekte Yok (IOPaint {inp_info.get('model', 'lama').upper()})"
+                        inpaint_color = TEXT_MUTED
 
                 # İş kuyruğunu çek
                 req = urllib.request.Request(BACKEND_JOBS_URL, headers={"User-Agent": "ControlPanel"})
@@ -648,6 +678,8 @@ class ControlPanelApp(tk.Tk):
                 detector_color,
                 ocr_status_text,
                 ocr_color,
+                inpaint_status_text,
+                inpaint_color,
             ),
         )
 
@@ -664,6 +696,8 @@ class ControlPanelApp(tk.Tk):
         det_color: str,
         ocr_status: str,
         ocr_color: str,
+        inp_status: str,
+        inp_color: str,
     ) -> None:
         if b_alive:
             self.lbl_backend_state.config(text="🟢 Çalışıyor (Port 5000)", fg=ACCENT_GREEN)
@@ -684,6 +718,7 @@ class ControlPanelApp(tk.Tk):
 
         self.lbl_detector_model_status.config(text=det_status, fg=det_color)
         self.lbl_ocr_model_status.config(text=ocr_status, fg=ocr_color)
+        self.lbl_inpaint_model_status.config(text=inp_status, fg=inp_color)
 
         if "AI:" in ai_job:
             self.lbl_ai_job.config(text=ai_job, fg=ACCENT_GOLD)
