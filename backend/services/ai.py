@@ -119,6 +119,19 @@ def detect_with_configured_model(image_file: Path) -> list[dict[str, float]]:
     model_id = normalize_detector_model_id(str(ai_value("rtdetrModelId", "RTDETR_MODEL_ID", DEFAULT_DETECTOR_MODEL)).strip())
     if not model_id:
         return []
+
+    with Image.open(image_file) as img:
+        width, height = img.size
+
+    # Uzun sayfalarda çözünürlük kaybını önlemek için Kayan Pencere (Sliding Window)
+    if height > 2200 and ai_bool("detectorSlidingWindow", "DETECTOR_SLIDING_WINDOW", True):
+        return detect_with_sliding_window(image_file, model_id, width, height)
+
+    raw_boxes = _detect_single_image(image_file, model_id)
+    return filter_false_positive_boxes(raw_boxes, (width, height))
+
+
+def _detect_single_image(image_file: Path, model_id: str) -> list[dict[str, float]]:
     try:
         if model_id == MANGA_TEXT_SEGMENTATION_2025_MODEL:
             return detect_with_manga_text_segmentation_2025(image_file, model_id)
@@ -130,6 +143,66 @@ def detect_with_configured_model(image_file: Path) -> list[dict[str, float]]:
             title = DETECTOR_MODEL_TITLES.get(model_id, model_id)
             raise RuntimeError(f"{title} çalıştırılamadı: {error}") from error
         return []
+
+
+def detect_with_sliding_window(image_file: Path, model_id: str, width: int, height: int) -> list[dict[str, float]]:
+    """Uzun sayfaları örtüşmeli pencereler halinde modele sokar ve birleştirir."""
+    window_h = 1600
+    overlap = 350
+    step = max(400, window_h - overlap)
+
+    collected_boxes: list[dict[str, float]] = []
+
+    with Image.open(image_file).convert("RGB") as full_image:
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / "tile.png"
+            y_offset = 0
+
+            while y_offset < height:
+                slice_bottom = min(height, y_offset + window_h)
+                tile = full_image.crop((0, y_offset, width, slice_bottom))
+                tile.save(temp_path, format="PNG")
+
+                tile_boxes = _detect_single_image(temp_path, model_id)
+                for box in tile_boxes:
+                    global_box = {
+                        **box,
+                        "x": float(box["x"]),
+                        "y": float(box["y"] + y_offset),
+                        "w": float(box["w"]),
+                        "h": float(box["h"]),
+                    }
+                    collected_boxes.append(clamp_detection_box(global_box, (width, height)))
+
+                if slice_bottom >= height:
+                    break
+                y_offset += step
+
+    filtered = filter_false_positive_boxes(collected_boxes, (width, height))
+    merged = merge_nearby_boxes(non_max_suppression(filtered), detector_merge_gap())
+    return sorted(merged, key=lambda item: (item["y"], item["x"]))
+
+
+def filter_false_positive_boxes(boxes: list[dict[str, float]], image_size: tuple[int, int]) -> list[dict[str, float]]:
+    """Küçük/boş sayfalardaki anlamsız gürültü ve leke kutularını eler."""
+    width, height = image_size
+    valid: list[dict[str, float]] = []
+    min_area = max(120, int(width * height * detector_min_area_ratio()))
+
+    for box in boxes:
+        w = float(box.get("w", 0))
+        h = float(box.get("h", 0))
+        area = w * h
+
+        # Çok küçük piksel lekelerini ve orantısız çizgileri ele
+        if w < 16 or h < 12 or area < min_area:
+            continue
+        # Tüm sayfayı kaplayan anormal kutuları ele
+        if w > width * 0.96 and h > height * 0.85:
+            continue
+        valid.append(box)
+
+    return valid
 
 
 def normalize_detector_model_id(model_id: str) -> str:

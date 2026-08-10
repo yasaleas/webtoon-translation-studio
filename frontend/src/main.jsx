@@ -349,6 +349,30 @@ function App() {
     return { pages: data.pages, boxes: ordered, manualMasks: orderedMasks };
   }
 
+  async function smartResliceEpisode() {
+    if (!session.projectId || !session.episodeId) return;
+    const accepted = window.confirm(
+      "Bölümdeki tüm sayfalar birleştirilip paneller arasındaki doğal boşluklardan yeniden dilimlenecek. İkiye bölünen yazılar ortadan kalkacak. Devam edilsin mi?",
+    );
+    if (!accepted) return;
+
+    try {
+      setNotice("Bölüm doğal boşluklardan akıllıca dilimleniyor...");
+      const data = await api.resliceEpisode(session.projectId, session.episodeId);
+      const ordered = orderBoxesByReadingPosition(data.state?.boxes || [], data.pages);
+      setPages(data.pages);
+      setBoxes(ordered);
+      setManualMasks([]);
+      if (data.pages?.length) setActivePageId(data.pages[0].id);
+      setActiveBoxId("");
+      setSelectedBoxIds([]);
+      setImageVersion(Date.now());
+      setNotice(data.message || "Bölüm başarıyla dilimlendi.");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }
+
   async function mergePageWithNext(pageId = activePage?.id) {
     if (!session.projectId || !session.episodeId || !pageId) return;
     const pageIndex = pages.findIndex((page) => page.id === pageId);
@@ -715,6 +739,7 @@ function App() {
           activePageId={activePage?.id}
           onBackToProjects={() => setView("projects")}
           onMergeNext={mergePageWithNext}
+          onReslice={smartResliceEpisode}
           onPage={(pageId) => {
             setActivePageId(pageId);
             setScrollTarget({ type: "page", pageId, nonce: Date.now() });
@@ -1158,7 +1183,7 @@ function projectMetadataPayload(draft) {
   };
 }
 
-function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage, onMergeNext }) {
+function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage, onMergeNext, onReslice }) {
   const placedCount = boxes.filter((box) => box.status === "placed").length;
   const translatedCount = boxes.filter((box) => box.translatedText).length;
   const activeIndex = pages.findIndex((page) => page.id === activePageId);
@@ -1186,6 +1211,11 @@ function PageSidebar({ boxes, pages, activePageId, onBackToProjects, onPage, onM
         <button type="button" className="merge-page-button" onClick={() => onMergeNext(activePageId)} disabled={!canMergeNext}>
           <Layers3 size={16} /> Sonrakiyle birleştir
         </button>
+        {onReslice && pages.length > 1 ? (
+          <button type="button" className="merge-page-button" style={{ marginTop: 6, background: "#1f2f29", borderColor: "#45d483", color: "#86efac" }} onClick={onReslice} title="Paneller arasındaki boşlukları bularak sayfaları temizce yeniden dilimler">
+            <WandSparkles size={16} /> Doğal Boşluktan Dilimle
+          </button>
+        ) : null}
         <small>{canMergeNext ? `${activePage.name} + ${nextPage.name}` : "Aktif sayfadan sonra sayfa yok"}</small>
       </div>
 

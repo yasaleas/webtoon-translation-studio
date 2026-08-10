@@ -37,6 +37,7 @@ from .storage import (
     restore_manual_mask_from_original,
     save_project_metadata,
     save_project_cover,
+    smart_reslice_episode,
     undo_image_history,
     update_box,
 )
@@ -258,6 +259,22 @@ def create_app() -> Flask:
                 "merge": result,
             }
         )
+
+    @app.post("/api/projects/<project_id>/episodes/<episode_id>/reslice")
+    def reslice_episode(project_id: str, episode_id: str):
+        payload = request.get_json(silent=True) or {}
+        target_height = int(payload.get("targetHeight", 2800))
+        try:
+            reslice_result = smart_reslice_episode(project_id, episode_id, target_height=target_height)
+            return jsonify(
+                {
+                    **reslice_result,
+                    "pages": page_records(project_id, episode_id),
+                    "state": load_state(project_id, episode_id),
+                }
+            )
+        except Exception as error:
+            return {"error": str(error)}, 400
 
     @app.get("/api/pages/<path:page_id>/image")
     def page_image(page_id: str):

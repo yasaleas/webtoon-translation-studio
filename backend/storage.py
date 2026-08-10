@@ -690,6 +690,110 @@ def merge_page_with_next(project_id: str, episode_id: str, page_id: str) -> dict
     }
 
 
+def find_natural_split_points(image: Image.Image, target_height: int = 2800, search_window: int = 500) -> list[int]:
+    """Webtoon tuvalinde paneller arası en temiz doğal boşluk (gutter) satırlarını tespit eder."""
+    import numpy as np
+
+    width, height = image.size
+    if height <= target_height * 1.25:
+        return [height]
+
+    gray = np.array(image.convert("L"), dtype=np.float32)
+    row_variance = np.std(gray, axis=1)
+
+    split_points: list[int] = []
+    current_y = 0
+
+    while current_y + target_height < height:
+        nominal_split = current_y + target_height
+        window_start = max(current_y + 800, nominal_split - search_window)
+        window_end = min(height - 300, nominal_split + search_window)
+
+        if window_start >= window_end:
+            split_points.append(nominal_split)
+            current_y = nominal_split
+            continue
+
+        window_vars = row_variance[window_start:window_end]
+        best_local_idx = int(np.argmin(window_vars))
+        best_split_y = window_start + best_local_idx
+
+        split_points.append(best_split_y)
+        current_y = best_split_y
+
+    if not split_points or split_points[-1] != height:
+        split_points.append(height)
+    return split_points
+
+
+def smart_reslice_episode(project_id: str, episode_id: str, target_height: int = 2800) -> dict[str, Any]:
+    """Bölüm sayfalarını birleştirip panellerin doğal boşluklarından bölerek yeniden dilimler."""
+    layout = ensure_episode_layout(project_id, episode_id)
+    original_dir = find_original_dir(layout)
+    edited_dir = layout / EDITED_DIR_NAME
+
+    pages = page_records(project_id, episode_id)
+    if not pages:
+        raise ValueError("Dilimlenecek sayfa bulunamadı.")
+
+    # 1. Tüm sayfaları dikey tek tuvalde birleştir
+    images = []
+    for page in pages:
+        p_path = edited_dir / safe_image_name(page["id"])
+        if not p_path.exists():
+            p_path = original_dir / safe_image_name(page["id"])
+        if p_path.exists():
+            images.append(Image.open(p_path).convert("RGBA"))
+
+    if not images:
+        raise ValueError("Geçerli sayfa görselleri okunamadı.")
+
+    max_w = max(img.width for img in images)
+    total_h = sum(img.height for img in images)
+    full_canvas = Image.new("RGBA", (max_w, total_h), (255, 255, 255, 255))
+
+    curr_y = 0
+    for img in images:
+        full_canvas.alpha_composite(img, (0, curr_y))
+        curr_y += img.height
+
+    # 2. Doğal panel boşluklarını bul
+    split_points = find_natural_split_points(full_canvas, target_height=target_height)
+
+    # 3. Yedek al ve eski sayfaları temizle
+    backup_root = episode_path(project_id, episode_id) / BACKUP_DIR_NAME / f"reslice_{uuid4().hex}"
+    backup_root.mkdir(parents=True, exist_ok=True)
+    for f in edited_dir.iterdir():
+        if f.is_file():
+            shutil.copy2(f, backup_root / f.name)
+            f.unlink()
+
+    # 4. Yeni sayfaları dilimle ve kaydet
+    new_pages = []
+    start_y = 0
+    for idx, end_y in enumerate(split_points, start=1):
+        slice_img = full_canvas.crop((0, start_y, max_w, end_y))
+        filename = f"{idx:03d}.png"
+        out_path = edited_dir / filename
+        orig_out_path = original_dir / filename
+        slice_img.save(out_path, format="PNG")
+        if not orig_out_path.exists():
+            slice_img.save(orig_out_path, format="PNG")
+        new_pages.append({"id": filename, "width": max_w, "height": end_y - start_y})
+        start_y = end_y
+
+    # 5. State'i temizle/sıfırla
+    state = default_state()
+    save_state(project_id, episode_id, state)
+
+    return {
+        "success": True,
+        "previousPageCount": len(pages),
+        "newPageCount": len(new_pages),
+        "message": f"Bölüm {len(new_pages)} sayfaya doğal panel boşluklarından başarıyla dilimlendi.",
+    }
+
+
 def begin_image_history(
     project_id: str,
     episode_id: str,

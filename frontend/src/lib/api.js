@@ -68,6 +68,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ projectId, episodeId }),
     }),
+  resliceEpisode: (projectId, episodeId, targetHeight = 2800) =>
+    request(`/api/projects/${encodeURIComponent(projectId)}/episodes/${encodeURIComponent(episodeId)}/reslice`, {
+      method: "POST",
+      body: JSON.stringify({ targetHeight }),
+    }),
   mergePageWithNext: (session, pageId) =>
     request(`/api/pages/${encodeURIComponent(pageId)}/merge-next`, {
       method: "POST",
