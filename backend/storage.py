@@ -193,14 +193,18 @@ def ensure_episode_layout(project_id: str, episode_id: str) -> Path:
         (episode / dirname).mkdir(parents=True, exist_ok=True)
     edited.mkdir(parents=True, exist_ok=True)
     original.mkdir(parents=True, exist_ok=True)
-    hidden_pages = hidden_page_ids_from_episode(episode)
-    for image in sorted(original.iterdir(), key=lambda p: natural_key(p.name)):
-        if image.suffix.lower() in ALLOWED_EXTENSIONS:
-            if image.name in hidden_pages:
-                continue
-            target = edited / image.name
-            if not target.exists():
-                shutil.copy2(image, target)
+    
+    # Sadece Duzenlenmis klasörü tamamen boşsa Orjinal'den başlangıç kopyalaması yap
+    existing_edited = [f for f in edited.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS]
+    if not existing_edited:
+        hidden_pages = hidden_page_ids_from_episode(episode)
+        for image in sorted(original.iterdir(), key=lambda p: natural_key(p.name)):
+            if image.suffix.lower() in ALLOWED_EXTENSIONS:
+                if image.name in hidden_pages:
+                    continue
+                target = edited / image.name
+                if not target.exists():
+                    shutil.copy2(image, target)
     return episode
 
 
@@ -732,18 +736,45 @@ def smart_reslice_episode(project_id: str, episode_id: str, target_height: int =
     original_dir = find_original_dir(layout)
     edited_dir = layout / EDITED_DIR_NAME
 
-    pages = page_records(project_id, episode_id)
-    if not pages:
+    # 1. En temiz kaynak görselleri topla
+    # Eğer daha önce alınmış bir ilk ham yedek varsa oradan başla
+    backup_dirs = sorted(
+        [d for d in (layout / BACKUP_DIR_NAME).iterdir() if d.is_dir() and d.name.startswith("reslice_")],
+        key=lambda d: d.name,
+    )
+    source_dir = edited_dir
+    if backup_dirs and (backup_dirs[0] / "original").exists() and list((backup_dirs[0] / "original").iterdir()):
+        source_dir = backup_dirs[0] / "original"
+
+    all_files = sorted(
+        [f for f in source_dir.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS],
+        key=lambda p: natural_key(p.name),
+    )
+    if not all_files:
+        all_files = sorted(
+            [f for f in original_dir.iterdir() if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS],
+            key=lambda p: natural_key(p.name),
+        )
+
+    if not all_files:
         raise ValueError("Dilimlenecek sayfa bulunamadı.")
 
-    # 1. Tüm sayfaları dikey tek tuvalde birleştir
+    # Mükerrer stem tekilleştirme (örnek: hem 001.jpg hem 001.png varsa yalnızca 1 tanesini al)
+    unique_files = []
+    seen_stems = set()
+    for f in all_files:
+        stem = f.stem.lower()
+        if stem not in seen_stems:
+            seen_stems.add(stem)
+            unique_files.append(f)
+
     images = []
-    for page in pages:
-        p_path = edited_dir / safe_image_name(page["id"])
-        if not p_path.exists():
-            p_path = original_dir / safe_image_name(page["id"])
-        if p_path.exists():
-            images.append(Image.open(p_path).convert("RGBA"))
+    for f in unique_files:
+        try:
+            with Image.open(f) as img:
+                images.append(img.convert("RGBA"))
+        except Exception:
+            pass
 
     if not images:
         raise ValueError("Geçerli sayfa görselleri okunamadı.")
@@ -760,19 +791,19 @@ def smart_reslice_episode(project_id: str, episode_id: str, target_height: int =
     # 2. Doğal panel boşluklarını bul
     split_points = find_natural_split_points(full_canvas, target_height=target_height)
 
-    # 3. Yedek al ve hem orijinal hem de düzenlenmiş klasörlerindeki eski sayfaları temizle
+    # 3. Yedek al ve hem orijinal hem de düzenlenmiş klasörlerindeki tüm eski sayfaları tamamen temizle
     backup_root = episode_path(project_id, episode_id) / BACKUP_DIR_NAME / f"reslice_{uuid4().hex}"
     backup_edited = backup_root / "edited"
     backup_orig = backup_root / "original"
     backup_edited.mkdir(parents=True, exist_ok=True)
     backup_orig.mkdir(parents=True, exist_ok=True)
 
-    for f in edited_dir.iterdir():
+    for f in list(edited_dir.iterdir()):
         if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
             shutil.copy2(f, backup_edited / f.name)
             f.unlink()
 
-    for f in original_dir.iterdir():
+    for f in list(original_dir.iterdir()):
         if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS:
             shutil.copy2(f, backup_orig / f.name)
             f.unlink()
@@ -796,7 +827,7 @@ def smart_reslice_episode(project_id: str, episode_id: str, target_height: int =
 
     return {
         "success": True,
-        "previousPageCount": len(pages),
+        "previousPageCount": len(unique_files),
         "newPageCount": len(new_pages),
         "message": f"Bölüm {len(new_pages)} sayfaya doğal panel boşluklarından başarıyla dilimlendi.",
     }
