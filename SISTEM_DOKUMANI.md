@@ -68,7 +68,13 @@ GitHub'a yayinlamadan once su kurallar uygulanmalidir:
 - Font yukleme boyutu `WEBTOON_MAX_UPLOAD_MB` ile sinirlidir.
 
 ## 8. Calistirma
+ 
+Masaüstü Kontrol Paneli ile çalıştırma:
+```bash
+./studio.sh
+```
 
+Manuel çalıştırma:
 ```bash
 python3.11 -m venv .venv-ai
 .venv-ai/bin/python -m pip install -U pip setuptools wheel

@@ -57,6 +57,22 @@ npm install
 
 ## Çalıştırma
 
+### Yöntem 1: Masaüstü Yönetim & Kontrol Paneli ile (Önerilen)
+
+Tüm servisleri, AI modellerini, canlı logları ve sistem kaynaklarını tek bir arayüzden yönetmek için:
+
+```bash
+./studio.sh
+```
+
+veya:
+
+```bash
+.venv-ai/bin/python control_panel.py
+```
+
+### Yöntem 2: Klasik Terminal ile
+
 API sunucusunu başlatın:
 
 ```bash
