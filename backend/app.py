@@ -8,6 +8,13 @@ from flask_cors import CORS
 from . import jobs
 from .fonts import font_path, list_fonts, upload_font
 from .project_metadata import download_cover, fetch_and_store_project_metadata, search_project_metadata
+from .services.ai import (
+    get_ai_models_status,
+    preload_detector_model,
+    preload_ocr_model,
+    unload_detector_model,
+    unload_ocr_model,
+)
 from .settings import public_settings, save_settings
 from .storage import (
     add_box,
@@ -69,6 +76,34 @@ def create_app() -> Flask:
             "inpaint": "IOPaint LaMa",
             "translation": "Gemini API",
         }
+
+    @app.get("/api/models/status")
+    def models_status():
+        return jsonify(get_ai_models_status())
+
+    @app.post("/api/models/preload")
+    def preload_model_route():
+        payload = request.get_json(silent=True) or {}
+        target = payload.get("model", "detector").lower()
+        if target == "detector":
+            return jsonify(preload_detector_model(payload.get("modelId")))
+        elif target == "ocr":
+            return jsonify(preload_ocr_model())
+        return {"error": f"Bilinmeyen model tipi: {target}"}, 400
+
+    @app.post("/api/models/unload")
+    def unload_model_route():
+        payload = request.get_json(silent=True) or {}
+        target = payload.get("model", "all").lower()
+        if target == "detector":
+            return jsonify(unload_detector_model())
+        elif target == "ocr":
+            return jsonify(unload_ocr_model())
+        elif target == "all":
+            res_d = unload_detector_model()
+            res_o = unload_ocr_model()
+            return jsonify({"status": "unloaded", "detector": res_d, "ocr": res_o})
+        return {"error": f"Bilinmeyen model tipi: {target}"}, 400
 
     @app.get("/api/fonts")
     def fonts():

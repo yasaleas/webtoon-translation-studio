@@ -1615,3 +1615,93 @@ def clamp_float(value: Any, minimum: float, maximum: float, fallback: float) -> 
     except (TypeError, ValueError):
         return fallback
     return min(max(parsed, minimum), maximum)
+
+
+def is_detector_loaded() -> bool:
+    global _RTDETR_MODEL, _RTDETR_ONNX, _YOLO_MODELS, _MANGA_TEXT_SEGMENTATION_CACHE
+    return bool(_RTDETR_MODEL is not None or _RTDETR_ONNX is not None or _YOLO_MODELS or _MANGA_TEXT_SEGMENTATION_CACHE)
+
+
+def is_ocr_loaded() -> bool:
+    global _OCR_PIPELINE, _OCR_GEOMETRY_PIPELINE
+    return bool(_OCR_PIPELINE is not None or _OCR_GEOMETRY_PIPELINE is not None)
+
+
+def preload_detector_model(model_id: str | None = None) -> dict[str, Any]:
+    model_id = normalize_detector_model_id(str(model_id or ai_value("rtdetrModelId", "RTDETR_MODEL_ID", DEFAULT_DETECTOR_MODEL)).strip())
+    dummy_img = Image.new("RGB", (64, 64), "white")
+    with TemporaryDirectory() as temp_dir:
+        dummy_path = Path(temp_dir) / "dummy.png"
+        dummy_img.save(dummy_path)
+        detect_with_configured_model(dummy_path)
+    info = detector_model_info(model_id)
+    return {"status": "loaded", "model": info["title"], "modelId": model_id, "family": info["family"]}
+
+
+def preload_ocr_model() -> dict[str, Any]:
+    dummy_img = Image.new("RGB", (64, 32), "white")
+    with TemporaryDirectory() as temp_dir:
+        dummy_path = Path(temp_dir) / "dummy.png"
+        dummy_img.save(dummy_path)
+        run_paddleocr_analysis(dummy_path)
+    return {"status": "loaded", "model": MODEL_REGISTRY["ocr"]}
+
+
+def unload_detector_model() -> dict[str, Any]:
+    global _RTDETR_MODEL, _RTDETR_PROCESSOR, _RTDETR_MODEL_ID, _RTDETR_ONNX, _RTDETR_ONNX_MODEL_ID, _YOLO_MODELS, _MANGA_TEXT_SEGMENTATION_CACHE
+    import gc
+
+    _RTDETR_MODEL = None
+    _RTDETR_PROCESSOR = None
+    _RTDETR_MODEL_ID = ""
+    _RTDETR_ONNX = None
+    _RTDETR_ONNX_MODEL_ID = ""
+    _YOLO_MODELS.clear()
+    _MANGA_TEXT_SEGMENTATION_CACHE.clear()
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    gc.collect()
+    return {"status": "unloaded", "model": "detector"}
+
+
+def unload_ocr_model() -> dict[str, Any]:
+    global _OCR_PIPELINE, _OCR_GEOMETRY_PIPELINE
+    import gc
+
+    _OCR_PIPELINE = None
+    _OCR_GEOMETRY_PIPELINE = None
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    gc.collect()
+    return {"status": "unloaded", "model": "ocr"}
+
+
+def get_ai_models_status() -> dict[str, Any]:
+    detector_info = current_detector_model_info()
+    return {
+        "detector": {
+            "loaded": is_detector_loaded(),
+            "activeModel": detector_info["title"],
+            "modelId": detector_info["id"],
+        },
+        "ocr": {
+            "loaded": is_ocr_loaded(),
+            "activeModel": MODEL_REGISTRY["ocr"],
+            "lang": str(ai_value("ocrLanguage", "OCR_LANG", "en")),
+        },
+        "inpaint": {
+            "model": str(ai_value("inpaintModel", "IOPAINT_MODEL", "lama")),
+            "device": str(ai_value("aiDevice", "AI_DEVICE", "cpu")),
+        },
+    }
+
